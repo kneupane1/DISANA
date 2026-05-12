@@ -1968,7 +1968,7 @@ class DISANAcomparer {
     if (plotPi0Corr) MakeTiledGridComparison("DIS_pi0DVCSdiffexp", "d_{exp}", allPi0DVCSdiffexp, &allBSAmeans, 0.0, 2, "pdf", false, true, false, false, meanKinVar);
     if (plotAccCorr) MakeTiledGridComparison("DIS_accCorr", "A_{acc}", allAccCorr, &allBSAmeans, 0.01, 1.0, "pdf", false, true, true, false, meanKinVar);
     if (plotEffCorr) MakeTiledGridComparison("DIS_effCorr", "A_{eff}", allEffCorr, &allBSAmeans, 0.1, 1.1, "pdf", false, true, false, false, meanKinVar);
-    if (plotRadCorr) MakeTiledGridComparison("DIS_radCorr", "C_{rad}", allRadCorr, &allBSAmeans, 0.0, 1.5, "pdf", false, true, false, false, meanKinVar);
+    if (plotRadCorr) MakeTiledGridComparison("DIS_radCorr", "C_{rad}", allRadCorr, &allBSAmeans, 0.5, 1.5, "pdf", false, true, false, false, meanKinVar);
     if (plotP1Cut) MakeTiledGridComparison("DIS_P1Cut", "C_{P1}", allP1Cut, &allBSAmeans, 0.0, 1.2, "pdf", false, true, false, false, meanKinVar);
   }
 
@@ -1977,8 +1977,14 @@ class DISANAcomparer {
     return (stat(name, &buffer) == 0);
   }
 
-  void dumpHistogram(TH1D* h, double xB, double Q2, double t, double xBmin, double xBmax, double Q2min, double Q2max, double tmin, double tmax,
+  void dumpHistogram(TH1D* h,
+                     double xB, double Q2, double t,
+                     double xBmin, double xBmax,
+                     double Q2min, double Q2max,
+                     double tmin, double tmax,
+                     const std::string& label,
                      const char* filename = "h_data.txt") {
+
     bool exists = file_exists(filename);
 
     std::ofstream fout(filename, std::ios::out | std::ios::app);
@@ -1988,18 +1994,34 @@ class DISANAcomparer {
     }
 
     if (!exists) {
-      fout << "# xB\tQ2\t-t\tphi\tvalue\terror\txBmin\txBmax\tQ2min\tQ2max\ttmin\ttmax\n";
+      fout << "# xB\tQ2\t-t\tphi\tvalue\terror\t"
+           << "xBmin\txBmax\tQ2min\tQ2max\ttmin\ttmax\tlabel\n";
     }
+
     for (int ibin = 1; ibin <= h->GetNbinsX(); ++ibin) {
-      double phi = h->GetBinCenter(ibin);
+      double phi   = h->GetBinCenter(ibin);
       double value = h->GetBinContent(ibin);
-      double err = h->GetBinError(ibin);
-      fout << xB << "\t" << Q2 << "\t" << t << "\t" << phi << "\t" << value << "\t" << err << "\t" << xBmin << "\t" << xBmax << "\t" << Q2min << "\t" << Q2max << "\t" << tmin
-           << "\t" << tmax << "\n";
+      double err   = h->GetBinError(ibin);
+
+      fout << xB << "\t"
+           << Q2 << "\t"
+           << t << "\t"
+           << phi << "\t"
+           << value << "\t"
+           << err << "\t"
+           << xBmin << "\t"
+           << xBmax << "\t"
+           << Q2min << "\t"
+           << Q2max << "\t"
+           << tmin << "\t"
+           << tmax << "\t"
+           << label << "\n";
     }
 
     fout.close();
-    std::cout << "Data " << h->GetName() << " written into " << filename << (exists ? " (appended)" : "") << "\n";
+    std::cout << "Data " << h->GetName()
+              << " written into " << filename
+              << (exists ? " (appended)" : "") << "\n";
   }
 
   void MakeTiledGridComparison(const std::string& observableName, const std::string& yAxisTitle, const std::vector<std::vector<std::vector<std::vector<TH1D*>>>>& histograms,
@@ -2201,7 +2223,7 @@ class DISANAcomparer {
               meanLatex->SetNDC();
               meanLatex->SetTextFont(42);
               meanLatex->Draw();
-              dumpHistogram(h, mean_xB, mean_Q2, mean_t, xb_edges[xb_bin], xb_edges[xb_bin + 1], q2_edges[q2_bin], q2_edges[q2_bin + 1], t_edges[t_bin], t_edges[t_bin + 1],
+              dumpHistogram(h, mean_xB, mean_Q2, mean_t, xb_edges[xb_bin], xb_edges[xb_bin + 1], q2_edges[q2_bin], q2_edges[q2_bin + 1], t_edges[t_bin], t_edges[t_bin + 1], labels[m],
                             Form("datapoint_%s.txt", observableName.c_str()));
             }
           }

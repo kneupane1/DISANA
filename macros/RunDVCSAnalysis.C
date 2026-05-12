@@ -27,6 +27,7 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   std::string dataconfig = "rgkfa18_7546";
   //std::string dataconfig = "rgkfa18_6535";
   //std::string dataconfig = "rgksp24_8477";
+  //std::string dataconfig = "rgksp24_6395";
 
   if (dataconfig == "rgkfa18_7546") {
     IsInbending = false;  // Set to false for outbending data
@@ -43,6 +44,9 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   if (dataconfig == "rgksp24_8477") {
     IsInbending = false;  // Set to true for inbending data
   }
+  if (dataconfig == "rgksp24_6395") {
+    IsInbending = false;  // Set to true for inbending data
+  } 
 
   std::cout << "Running DVCS Analysis with configuration: " << dataconfig << std::endl;
 
@@ -234,6 +238,11 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
     trackCuts->AddECinFiducialRange(22, 1, "lv", 67.5, 94.5);
   }
 
+  if (dataconfig == "rgksp24_6395"){
+    trackCuts->AddECinFiducialRange(11, 1, "lv", 67.5, 94.5);
+    trackCuts->AddECinFiducialRange(22, 1, "lv", 67.5, 94.5);
+  }
+
   /// set sampling fraction for the particle in detector
   trackCuts->SetMinECALEnergyCut(11, 1, 0.06);  // Electron PCal layer 1
   // apply sampling fraction and diagolal cuts tbd!!
@@ -310,6 +319,20 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
     trackCuts->AddSamplingFractionMinCut(11, 6, 0.161239, 0.0156868, -0.00128746);    // Electronsector6
     trackCuts->AddSamplingFractionMaxCut(11, 6, 0.299963, -0.0030303, -0.000150413);  // Electro sector 6
   }
+  if (dataconfig == "rgksp24_6395") { //**********resuing rgk fall18 6.5GeV, better to re-run a new one */
+    trackCuts->AddSamplingFractionMinCut(11, 1, 0.129479, 0.0284944, -0.00255477);     // Electronsector 1
+    trackCuts->AddSamplingFractionMaxCut(11, 1, 0.291026, 0.00267055, -0.000682925);  // Electro sector 1
+    trackCuts->AddSamplingFractionMinCut(11, 2, 0.148413, 0.0175468, -0.00101822);     // Electronsector 2
+    trackCuts->AddSamplingFractionMaxCut(11, 2, 0.291265, 0.00131041, -0.000321427);   // Electronsector 2
+    trackCuts->AddSamplingFractionMinCut(11, 3, 0.133683, 0.0284258, -0.00245536);    // Electronsector 3
+    trackCuts->AddSamplingFractionMaxCut(11, 3, 0.278676, 0.010232, -0.00156497);  // Electro sector 3
+    trackCuts->AddSamplingFractionMinCut(11, 4, 0.127047, 0.0315586, -0.00306858);    // Electronsector4
+    trackCuts->AddSamplingFractionMaxCut(11, 4, 0.283795, 0.00622474, -0.00114807);   // Electronsector4
+    trackCuts->AddSamplingFractionMinCut(11, 5, 0.14653, 0.0173448, -0.00100931);    // Electronsector5
+    trackCuts->AddSamplingFractionMaxCut(11, 5, 0.289485, 0.00126921, -0.000440945);   // Electronsector5
+    trackCuts->AddSamplingFractionMinCut(11, 6, 0.147071, 0.0176412, -0.000913347);    // Electronsector6
+    trackCuts->AddSamplingFractionMaxCut(11, 6, 0.295828, -0.00145277, -0.0000326392);  // Electro sector 6
+  }
   // particles for the reaction DVCS: e, p, and gamma
   EventCut* eventCuts = new EventCut();
 
@@ -347,6 +370,14 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
     proton.minFDMomentum = 0.3f;  // Minimum momentum for protons in FD
   }
   if (dataconfig == "rgksp24_8477") {
+    proton.pid = 2212;            // Proton PID
+    proton.charge = 1;            // Proton charge
+    proton.minCount = 1;          // Minimum count of protons
+    proton.maxCount = 1;          // Maximum count of protons
+    proton.minCDMomentum = 0.3f;  // Minimum momentum for protons
+    proton.minFDMomentum = 0.3f;  // Minimum momentum for protons in FD
+  }
+  if (dataconfig == "rgksp24_6395") {
     proton.pid = 2212;            // Proton PID
     proton.charge = 1;            // Proton charge
     proton.minCount = 1;          // Minimum count of protons
@@ -485,8 +516,11 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   if (dataconfig == "rgksp24_8477") {
     dvcsTask->SetBeamEnergy(8.477);  // Set the beam energy for RGK Sp24 8.477GeV
   }
+  if (dataconfig == "rgksp24_6395") {
+    dvcsTask->SetBeamEnergy(6.395);  // Set the beam energy for RGK Sp24 6.395GeV
+  }
   dvcsTask->SetFTonConfig(true);  // Set to true if you have FT (eq. RGK Fall2018 Pass2 6.535GeV is FT-off)
-  if (dataconfig == "rgkfa18_6535" || dataconfig == "rgksp24_8477") {
+  if (dataconfig == "rgkfa18_6535" || dataconfig == "rgksp24_8477" || dataconfig == "rgksp24_6395") {
     dvcsTask->SetFTonConfig(false);  // Set to false if you have FT (eq. RGK Fall2018 Pass2 6.535GeV is FT-off)
   }
   dvcsTask->SetDoFiducialCut(true);

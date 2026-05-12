@@ -15,10 +15,13 @@ EXE="$SCRIPT_DIR/../build/AnalysisDVCS"
 OUTPUT_BASE="$SCRIPT_DIR/../build/dvcs_parallel_output"
 typeset -a INPUT_DIRS
 INPUT_DIRS=(
-  /volatile/clas12/osg/yijie/10739/
-  /volatile/clas12/osg/yijie/10740/
+  /volatile/clas12/osg/yijie/10833/
+  /volatile/clas12/osg/yijie/10834/
+  /volatile/clas12/osg/yijie/10836/
+  /volatile/clas12/osg/yijie/10837/
+  /volatile/clas12/osg/yijie/10838/
 )
-MAX_TOTAL_FILES=11455
+MAX_TOTAL_FILES=10000000000000
 
 # AnalysisDVCS 第3个参数
 ARG3=1

@@ -50,48 +50,58 @@ void DrawDCChi2ndf_Optimized(const int &selectedPid, const int &selecteddetector
     }
 
     df.Foreach([&](const RVec<short> &det, const RVec<short> &layer,
-                    const RVec<float> &edge, const RVec<float> &theta,
-                    const RVec<float> &chi2, const RVec<int16_t> &ndf,
-                    const RVec<int16_t> &trackpindex, const RVec<short> &sector,
-                    const RVec<int16_t> &pindex, const RVec<int> &pid, const RVec<int> &passFid) {
-        for (size_t i = 0; i < layer.size(); ++i) {
-            int idx = pindex[i];
-            int fidpass = doFid ? passFid[idx] : 1;  // 如果不需要fiducial cuts，则始终通过
-            if (det[i] != selecteddetector || pid[idx] != selectedPid || !fidpass) continue;
-            float trackchi2 = 0;
-            float trackndf = 0;
-            short tracksector = 0;
-            for (size_t j = 0; j < trackpindex.size(); ++j) {
-                if (trackpindex[j] == idx) {
-                    trackchi2 = chi2[j];
-                    trackndf = ndf[j];
-                    tracksector = sector[j];
-                    break;  // 找到对应的trackpindex后退出循环
-                }
-            }
-            float chi2ndf = trackndf > 0 ? trackchi2 / trackndf : 0;
-            int lay = layer[i];
-            float edg = edge[i];
-            float th = theta[i];
+                const RVec<float> &edge, const RVec<float> &theta,
+                const RVec<float> &chi2, const RVec<int16_t> &ndf,
+                const RVec<int16_t> &trackpindex, const RVec<short> &sector,
+                const RVec<int16_t> &pindex, const RVec<int> &pid, const RVec<int> &passFid) {
 
-            auto it = std::find(layers.begin(), layers.end(), lay);
-            if (it == layers.end()) continue;
-            size_t li = std::distance(layers.begin(), it);
-            int ti = thetaRegionIndex(th, thetaCuts);
-            if (tracksector < 1 || tracksector > 6) {
-                std::cout << "Warning: tracksector is wrong for pindex " << idx << ", skipping this entry." << std::endl;
-            }
+    for (size_t i = 0; i < layer.size(); ++i) {
+        if (i >= det.size() || i >= edge.size() || i >= theta.size() || i >= pindex.size()) continue;
 
-            std::string key = "L" + std::to_string(lay) + "_S" + std::to_string(tracksector) + "_T" + std::to_string(ti);
-            if (!histos.count(key)) {
-                std::cerr << "Warning: histogram key not found -> " << key << std::endl;
-                std::cout << key << " does not exist in histos map." << std::endl;
-            }
+        int idx = pindex[i];
+        if (idx < 0 || idx >= (int)pid.size()) continue;
+        if (doFid && idx >= (int)passFid.size()) continue;
 
-            if(chi2ndf<ymax/2) histos[key]->Fill(edg, chi2ndf);
+        int fidpass = doFid ? passFid[idx] : 1;
+        if (det[i] != selecteddetector || pid[idx] != selectedPid || !fidpass) continue;
+
+        float trackchi2 = 0;
+        float trackndf = 0;
+        short tracksector = -1;
+
+        for (size_t j = 0; j < trackpindex.size(); ++j) {
+            if (j >= chi2.size() || j >= ndf.size() || j >= sector.size()) continue;
+
+            if (trackpindex[j] == idx) {
+                trackchi2 = chi2[j];
+                trackndf = ndf[j];
+                tracksector = sector[j];
+                break;
+            }
         }
-    }, {"REC_Traj_detector", "REC_Traj_layer", "REC_Traj_edge", "REC_Particle_theta", "REC_Track_chi2",
-        "REC_Track_NDF", "REC_Track_pindex", "REC_Track_sector", "REC_Traj_pindex", "REC_Particle_pid", "REC_Track_pass_fid"});
+
+        if (tracksector < 1 || tracksector > 6) continue;
+        if (trackndf <= 0) continue;
+
+        int lay = layer[i];
+        auto it = std::find(layers.begin(), layers.end(), lay);
+        if (it == layers.end()) continue;
+
+        int ti = thetaRegionIndex(theta[i], thetaCuts);
+
+        std::string key = "L" + std::to_string(lay)
+                        + "_S" + std::to_string(tracksector)
+                        + "_T" + std::to_string(ti);
+
+        auto hit = histos.find(key);
+        if (hit == histos.end() || hit->second == nullptr) continue;
+
+        float chi2ndf = trackchi2 / trackndf;
+        if (chi2ndf < ymax / 2) hit->second->Fill(edge[i], chi2ndf);
+    }
+}, {"REC_Traj_detector", "REC_Traj_layer", "REC_Traj_edge", "REC_Particle_theta",
+    "REC_Track_chi2", "REC_Track_NDF", "REC_Track_pindex", "REC_Track_sector",
+    "REC_Traj_pindex", "REC_Particle_pid", "REC_Track_pass_fid"});
 
     for (size_t si = 0; si < sectors.size(); ++si) {
         for (size_t li = 0; li < layers.size(); ++li) {
@@ -331,19 +341,19 @@ void DrawDCHitResponse(const int &selectedPid, const int &selecteddetector,
 
 
 void analysisDCFid() {
-    std::string path = "../build/photononly/";
+    std::string path = "../build/";
     std::vector<int> layers = {6, 18, 36};
     std::vector<float> xmins = {0, 0, 0, 0, 0, 0};
     std::vector<float> xmaxs = {25, 25, 25, 25, 25, 25};
     std::vector<float> thetaCuts = {10, 15, 20, 25};
     std::vector<int> sectors = {1, 2, 3, 4, 5, 6};
-    //DrawDCChi2ndf_Optimized(11, 6, 0, 40, 50, layers, sectors, xmins, xmaxs, thetaCuts, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr", true);
-    DrawDCChi2ndf_Optimized(11, 6, 0, 40, 50, layers, sectors, xmins, xmaxs, thetaCuts, path + "dfSelected.root", "dfSelected", false);
+    DrawDCChi2ndf_Optimized(11, 6, 0, 40, 50, layers, sectors, xmins, xmaxs, thetaCuts, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr", true);
+    //DrawDCChi2ndf_Optimized(11, 6, 0, 40, 50, layers, sectors, xmins, xmaxs, thetaCuts, path + "dfSelected.root", "dfSelected", false);
     //DrawDCChi2ndf_Optimized(2212, 6, 0, 40, 50, layers, sectors, xmins, xmaxs, thetaCuts, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr", true);
     //DrawDCChi2ndf_Optimized(2212, 6, 0, 40, 50, layers, sectors, xmins, xmaxs, thetaCuts, path + "dfSelected.root", "dfSelected", false);
-    //DrawDCHitResponse(11, 6, layers, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr",true);
+    DrawDCHitResponse(11, 6, layers, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr",true);
     //DrawDCHitResponse(2212, 6, layers, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr",true);
-    DrawDCHitResponse(11, 6, layers, path + "dfSelected.root", "dfSelected",false);
+    //DrawDCHitResponse(11, 6, layers, path + "dfSelected.root", "dfSelected",false);
     //DrawDCHitResponse(2212, 6, layers, path + "dfSelected.root", "dfSelected",false);
     gApplication->Terminate(0);
 }

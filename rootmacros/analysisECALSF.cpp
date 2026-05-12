@@ -243,7 +243,7 @@ void DrawECALSF(const int &selectedPid, const int &selecteddetector,
 void analysisECALSF() {
     ROOT::EnableImplicitMT();
 
-    std::string path = "../build/"; 
+    std::string path = "../build/File8477/"; 
     //std::string path = "../../../analysis1101/DISANA/build/data/";
     
     //==================// DVCS analysis paths==========================

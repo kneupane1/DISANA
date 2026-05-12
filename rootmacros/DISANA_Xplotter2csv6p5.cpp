@@ -1162,6 +1162,8 @@ ROOT::RDF::RNode WriteSlimAndReload_exclusive(ROOT::RDF::RNode df, const std::st
     "REC_Photon_MaxE_std",
     "REC_Event_helicity",
     "RUN_config_run",
+    "REC_Track_pindex",
+    "REC_Track_sector",
 
     // ===== Picked particles =====
     "ele_px","ele_py","ele_pz",

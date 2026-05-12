@@ -203,6 +203,7 @@ std::vector<std::string> DVCSAnalysis::MinimalColumns() const {
   auto cols = CombineColumns(RECParticle::All());
   cols = CombineColumns(cols, RECTraj::ForFiducialCut());
   cols = CombineColumns(cols, RECCalorimeter::ForFiducialCut());
+  cols = CombineColumns(cols, RECTrack::ForFiducialCut());
   if (fFTonConfig)
     cols = CombineColumns(cols, RECForwardTagger::ForFiducialCut());
     cols.push_back("REC_Event_helicity");
@@ -223,7 +224,7 @@ std::vector<std::string> DVCSAnalysis::MinimalColumns() const {
       "REC_Particle_pass",
       "REC_Event_pass",
       "REC_MotherMass",
-      "REC_DaughterParticle_pass",
+      "REC_DaughterParticle_pass"
   })
     cols.push_back(c);
   

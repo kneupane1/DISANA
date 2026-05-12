@@ -3171,7 +3171,7 @@ void DrawDeltaPByThetaPhiBins(
 void analysisMomentumCorrection() {
      ROOT::EnableImplicitMT(6); 
     //std::string path = "/work/clas12/yijie/clas12ana/analysis801/DISANA/build/nobkg/";
-    std::string path = "../build/ProtonECorrUnifyPhi/";
+    std::string path = "../build/File7546/data/";
     //std::string path = "/w/hallb-scshelf2102/clas12/singh/Softwares/DISANA_main/data_processed/sims/clasdis/outb/";
     //std::string path = "/w/hallb-scshelf2102/clas12/singh/Softwares/DISANA_main/data_processed/sims/clasdis/spring2018/outb/";
     //std::string path = "/w/hallb-scshelf2102/clas12/singh/Softwares/DISANA_main/data_processed/sims/clasdis/spring2018/inb/";
@@ -3292,27 +3292,27 @@ void analysisMomentumCorrection() {
     DrawDeltaPByThetaBins(11,thetaCutsFTelectron,"FT",{{"electron_deltaP_vs_p","electron #delta p vs p","deltaP:p",500,0,8,500,-1.0,1.0}},filename,treename);
     DrawDeltaPByThetaBins(11,{0},"ALL",{{"electron_deltaP_vs_p","electron #delta p vs p","deltaP:p",500,0,8,500,-0.1,0.1}},filename,treename);
   */
-/*
-    Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,0,60}},filename,treename);
-    Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_phi_vs_theta","proton phi vs theta","phi:theta",500,0,360,500,0,60}},filename,treename);
-    Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,20,150}},filename,treename);
-    Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_phi_vs_theta","proton phi vs theta","phi:theta",500,0,360,500,20,150}},filename,treename);
-    Draw2DParticleKinematicsByThetaBins(2212,{0},"ALL",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,0,150}},filename,treename);
-*/ 
+
+    //Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,0,60}},filename,treename);
+    Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_phi_vs_theta","proton phi vs theta","phi:theta",500,0,360,500,0,60}},filenameCorrected,treenameCorrected);
+    //Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,20,150}},filename,treename);
+    Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_phi_vs_theta","proton phi vs theta","phi:theta",500,0,360,500,20,150}},filenameCorrected,treenameCorrected);
+    //Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_p_vs_theta","proton p vs theta","p:theta",200,0.4,2,200,10,50}},filenameCorrected,treenameCorrected);
+ 
    
     //DrawDeltaPByThetaBins(2212,thetaCutsFDproton,"FD",{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,3,100,-0.05,0.05}},filename,treename,outDir, isOutBend);
     //DrawDeltaPByThetaBins(2212,thetaCutsCDproton,"CD",{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.01,2.5,100,-0.2,0.2}},filename,treename,outDir, isOutBend);
     //DrawDeltaPByThetaBins(2212,{0},"ALL",{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0,8,100,-0.1,0.1}},filename,treename,outDir, isOutBend);
     //DrawDeltaPByThetaBins(2212,thetaCutsFDproton,"FD",{{"proton_deltaP_vs_pcorr","corrected proton #delta p vs p","deltaP:p",100,0,2.5,100,-0.1,0.1}},filenameCorrected,treenameCorrected);
     //DrawDeltaPByThetaBins(2212,thetaCutsCDproton,"CD",{{"proton_deltaP_vs_pcorr","corrected proton #delta p vs p","deltaP:p",100,0,2.5,100,-0.2,0.2}},filenameCorrected,treenameCorrected);
-
+/*
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",1,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filename,treename,"ProtonMomCorr",isOutBend,true);
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",1,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filenameCorrected,treenameCorrected,"ProtonMomCorrPhiCorrected",isOutBend,false);
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",36,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filename,treename,"ProtonMomCorrPhi36",isOutBend,true);
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",36,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filenameCorrected,treenameCorrected,"ProtonMomCorrPhiCorrected36",isOutBend,false);
     PlotMomentumCorrectionVsPhi_MultiP_FromParamVsPhiPoints(2212,"FD",{0.8, 1.0, 1.5, 2.0},"ProtonMomCorrPhi36","from_txt");
     PlotMomentumCorrectionVsPhi_MultiP_FromParamVsPhiPoints(2212,"FD",{0.8, 1.0, 1.5, 2.0},"ProtonMomCorrPhiCorrected36","from_txt");
-
+*/
     //GeneratePiecewiseProtonCorrectionFunctionFromParamVsPhi(
     //    "ProtonMomCorrPhi36",
     //    "ProtonMomCorrPhi36/GeneratedPiecewiseProtonCorrection_RunDVCSAnalysis.inc",

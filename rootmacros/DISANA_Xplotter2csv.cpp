@@ -188,6 +188,9 @@ void DISANA_Xplotter2csv() {
   std::string filename_afterFid_7546_dvcsmc_rad = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/radandP1/raddelta0p1v0p6Max.root";
   std::string filename_afterFid_7546_dvcsmc_norad = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/radandP1/nor.root";
   std::string filename_afterFid_7546_dvcsmc_p1cut = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/radandP1/norP1_2.root";
+
+  std::string filename_afterFid_7546_dvcsmc_km15_rad = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/radandP1/radkm15_7546.root";
+  std::string filename_afterFid_7546_dvcsmc_km15_norad = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/radandP1/noradkm15_7546.root";
   
 
   float beam_energy = 7.546;
@@ -206,6 +209,9 @@ void DISANA_Xplotter2csv() {
   ROOT::RDF::RNode df_afterFid_7546_dvcsmc_norad_init = InitGenKinematics(filename_afterFid_7546_dvcsmc_norad, "MC", beam_energy);
   ROOT::RDF::RNode df_afterFid_7546_dvcsmc_p1cut_init = InitGenKinematics(filename_afterFid_7546_dvcsmc_p1cut, "MC", beam_energy);
 
+  ROOT::RDF::RNode df_afterFid_7546_dvcsmc_km15_rad_init = InitGenKinematics(filename_afterFid_7546_dvcsmc_km15_rad, "MC", beam_energy);
+  ROOT::RDF::RNode df_afterFid_7546_dvcsmc_km15_norad_init = InitGenKinematics(filename_afterFid_7546_dvcsmc_km15_norad, "MC", beam_energy);
+
   ROOT::RDF::RNode df_afterFid_7546_data = GetSlim_exclusive(df_afterFid_7546_data_init, "dfSlim_7546_data.root", "dfSlim_7546_data", false);
   ROOT::RDF::RNode df_afterFid_7546_pi0MC = GetSlim_exclusive(df_afterFid_7546_pi0MC_init, "dfSlim_7546_pi0MC.root", "dfSlim_7546_pi0MC", false);
   ROOT::RDF::RNode df_afterFid_7546_dvcsmc_gen = GetSlim_exclusive(df_afterFid_7546_dvcsmc_gen_init, "dfSlim_7546_dvcsmc_gen.root", "dfSlim_7546_dvcsmc_gen", true);
@@ -215,6 +221,9 @@ void DISANA_Xplotter2csv() {
   ROOT::RDF::RNode df_afterFid_7546_dvcsmc_rad_temp = GetSlim_exclusive(df_afterFid_7546_dvcsmc_rad_init, "dfSlim_7546_dvcsmc_rad.root", "dfSlim_7546_dvcsmc_rad", true);
   ROOT::RDF::RNode df_afterFid_7546_dvcsmc_norad = GetSlim_exclusive(df_afterFid_7546_dvcsmc_norad_init, "dfSlim_7546_dvcsmc_norad.root", "dfSlim_7546_dvcsmc_norad", true);
   ROOT::RDF::RNode df_afterFid_7546_dvcsmc_p1cut = GetSlim_exclusive(df_afterFid_7546_dvcsmc_p1cut_init, "dfSlim_7546_dvcsmc_p1cut.root", "dfSlim_7546_dvcsmc_p1cut", true);
+
+  ROOT::RDF::RNode df_afterFid_7546_dvcsmc_km15_rad = GetSlim_exclusive(df_afterFid_7546_dvcsmc_km15_rad_init, "dfSlim_7546_dvcsmc_km15_rad.root", "dfSlim_7546_dvcsmc_km15_rad", true);
+  ROOT::RDF::RNode df_afterFid_7546_dvcsmc_km15_norad = GetSlim_exclusive(df_afterFid_7546_dvcsmc_km15_norad_init, "dfSlim_7546_dvcsmc_km15_norad.root", "dfSlim_7546_dvcsmc_km15_norad", true);
 
   DrawStyle fitStyle(0.06, 0.05, 1.0, 1.3);  // You can tweak this
 
@@ -346,7 +355,21 @@ void DISANA_Xplotter2csv() {
                               df_afterFid_7546_dvcsmc_rad,
                               df_afterFid_7546_dvcsmc_norad,
                               df_afterFid_7546_dvcsmc_p1cut,
-                              "RGK 7.5GeV", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9069/0.9647);
+                              "VGG", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9069/0.9647);
+
+  comparer.AddModelwithPi0Corr(df_final_dvcsPi_rejected_7546_data,
+                              //df_afterFid_7546_dvcsmc_gen,
+                              df_final_OnlPi0_7546_data,
+                              df_final_dvcsPi_rejected_7546_pi0MC,
+                              df_final_OnlPi0_7546_pi0MC,
+                              df_afterFid_7546_dvcsmc_gen,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_rec,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_bkg,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_nobkg,
+                              df_afterFid_7546_dvcsmc_km15_rad,
+                              df_afterFid_7546_dvcsmc_km15_norad,
+                              df_afterFid_7546_dvcsmc_km15_norad,
+                              "KM15", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9069/0.9647);
 
   //comparer.PlotKinematicComparison();
   //comparer.PlotPi0KinematicComparison();
@@ -1242,6 +1265,8 @@ ROOT::RDF::RNode WriteSlimAndReload_exclusive(ROOT::RDF::RNode df, const std::st
     "REC_Photon_MaxE_std",
     "REC_Event_helicity",
     "RUN_config_run",
+    "REC_Track_pindex",
+    "REC_Track_sector",
 
     // ===== Picked particles =====
     "ele_px","ele_py","ele_pz",

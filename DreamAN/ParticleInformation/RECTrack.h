@@ -9,6 +9,7 @@
 struct RECTrack {
     static const std::vector<std::string>& All();
     static const std::vector<std::string>& Extend();
+    static const std::vector<std::string>& ForFiducialCut();
 
     using AllTypes = std::tuple<
         const std::vector<int>&,      // pindex

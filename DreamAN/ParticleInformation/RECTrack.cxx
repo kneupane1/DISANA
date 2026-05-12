@@ -14,6 +14,14 @@ const std::vector<std::string>& RECTrack::All() {
     return names;
 }
 
+const std::vector<std::string>& RECTrack::ForFiducialCut() {
+    static const std::vector<std::string> names = {
+        "REC_Track_pindex",
+        "REC_Track_detector",
+        "REC_Track_sector",
+    };
+    return names;
+}
 
 std::function<std::vector<float>(const std::vector<int16_t>& pindex,
                                  const std::vector<int16_t>& detector,

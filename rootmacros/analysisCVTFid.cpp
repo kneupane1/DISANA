@@ -47,38 +47,94 @@ void DrawCVTChi2ndf_Optimized(const int &selectedPid, const int &selecteddetecto
     }
 
     df.Foreach([&](const RVec<short> &det, const RVec<short> &layer,
-                    const RVec<float> &edge, const RVec<float> &theta,
-                    const RVec<float> &chi2, const RVec<int16_t> &ndf,
-                    const RVec<int16_t> &trackpindex,
-                    const RVec<int16_t> &pindex, const RVec<int> &pid, const RVec<int> &passFid) {
-        for (size_t i = 0; i < layer.size(); ++i) {
-            int idx = pindex[i];
-            int fidpass = doFid ? passFid[idx] : 1;  // 如果不需要fiducial cuts，则始终通过
-            if (det[i] != selecteddetector || pid[idx] != selectedPid || !fidpass) continue;
-            float trackchi2 = 0;
-            float trackndf = 0;
-            for (size_t j = 0; j < trackpindex.size(); ++j) {
-                if (trackpindex[j] == idx) {
-                    trackchi2 = chi2[j];
-                    trackndf = ndf[j];
-                    break;  // 找到对应的trackpindex后退出循环
-                }
-            }
-            float chi2ndf = trackndf > 0 ? trackchi2 / trackndf : 0;
-            int lay = layer[i];
-            float edg = edge[i];
-            float th = theta[i];
+                const RVec<float> &edge, const RVec<float> &theta,
+                const RVec<float> &chi2, const RVec<int16_t> &ndf,
+                const RVec<int16_t> &trackpindex,
+                const RVec<int16_t> &pindex, const RVec<int> &pid,
+                const RVec<int> &passFid) {
 
-            auto it = std::find(layers.begin(), layers.end(), lay);
-            if (it == layers.end()) continue;
-            size_t li = std::distance(layers.begin(), it);
-            int ti = thetaRegionIndex(th, thetaCuts);
+    for (size_t i = 0; i < layer.size(); ++i) {
 
-            std::string key = "L" + std::to_string(lay) + "_T" + std::to_string(ti);
-            if (chi2ndf<ymax/2) histos[key]->Fill(edg, chi2ndf);
+        if (i >= det.size() || i >= edge.size() ||
+            i >= theta.size() || i >= pindex.size()) {
+            continue;
         }
-    }, {"REC_Traj_detector", "REC_Traj_layer", "REC_Traj_edge", "REC_Particle_theta", "REC_Track_chi2",
-        "REC_Track_NDF", "REC_Track_pindex", "REC_Traj_pindex", "REC_Particle_pid", "REC_Track_pass_fid"});
+
+        int idx = pindex[i];
+
+        if (idx < 0 || idx >= (int)pid.size()) {
+            continue;
+        }
+
+        if (doFid && idx >= (int)passFid.size()) {
+            continue;
+        }
+
+        int fidpass = doFid ? passFid[idx] : 1;
+
+        if (det[i] != selecteddetector || pid[idx] != selectedPid || !fidpass) {
+            continue;
+        }
+
+        bool foundTrack = false;
+        float trackchi2 = 0.0;
+        float trackndf  = 0.0;
+
+        for (size_t j = 0; j < trackpindex.size(); ++j) {
+            if (j >= chi2.size() || j >= ndf.size()) {
+                continue;
+            }
+
+            if (trackpindex[j] == idx) {
+                trackchi2 = chi2[j];
+                trackndf  = ndf[j];
+                foundTrack = true;
+                break;
+            }
+        }
+
+        if (!foundTrack) {
+            continue;
+        }
+
+        if (trackndf <= 0) {
+            continue;
+        }
+
+        float chi2ndf = trackchi2 / trackndf;
+
+        if (!std::isfinite(chi2ndf)) {
+            continue;
+        }
+
+        if (chi2ndf >= ymax / 2.0) {
+            continue;
+        }
+
+        int lay = layer[i];
+
+        auto it = std::find(layers.begin(), layers.end(), lay);
+        if (it == layers.end()) {
+            continue;
+        }
+
+        int ti = thetaRegionIndex(theta[i], thetaCuts);
+
+        std::string key = "L" + std::to_string(lay)
+                        + "_T" + std::to_string(ti);
+
+        auto hIt = histos.find(key);
+        if (hIt == histos.end() || hIt->second == nullptr) {
+            continue;
+        }
+
+        hIt->second->Fill(edge[i], chi2ndf);
+    }
+
+}, {"REC_Traj_detector", "REC_Traj_layer", "REC_Traj_edge",
+    "REC_Particle_theta", "REC_Track_chi2", "REC_Track_NDF",
+    "REC_Track_pindex", "REC_Traj_pindex", "REC_Particle_pid",
+    "REC_Track_pass_fid"});
 
     for (size_t li = 0; li < layers.size(); ++li) {
         TCanvas *c = new TCanvas(("c_layer" + std::to_string(layers[li])).c_str(), "", 2000, 1500);
@@ -249,15 +305,15 @@ void DrawCVTHitResponse(const int &selectedPid, const int &selecteddetector,
 void analysisCVTFid() {
     ROOT::EnableImplicitMT();
 
-    std::string path = "../build/protononly/";
+    std::string path = "../build/";
 
     std::vector<int> layers = {1, 3, 5, 7, 12};
     std::vector<float> xmins = {-0.5, -0.5, -0.5, -4.0, -4.0};
     std::vector<float> xmaxs = {2.5, 2.5, 2.5, 20.0, 20.0};
     std::vector<float> thetaCuts = {55, 85, 115};
     //DrawCVTChi2ndf_Optimized(2212, 5, 0, 60, 50, layers, xmins, xmaxs, thetaCuts, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr", true);
-    //DrawCVTHitResponse(2212, 5, layers, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr", true);
-    DrawCVTChi2ndf_Optimized(2212, 5, 0, 60, 50, layers, xmins, xmaxs, thetaCuts, path + "dfSelected.root", "dfSelected", false);
+    DrawCVTHitResponse(2212, 5, layers, path + "dfSelected_afterFid_afterCorr.root", "dfSelected_afterFid_afterCorr", true);
+    //DrawCVTChi2ndf_Optimized(2212, 5, 0, 60, 50, layers, xmins, xmaxs, thetaCuts, path + "dfSelected.root", "dfSelected", false);
     DrawCVTHitResponse(2212, 5, layers, path + "dfSelected.root", "dfSelected", false);
     gApplication->Terminate(0);
 }
