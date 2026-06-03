@@ -429,8 +429,8 @@ void PlotThetaMap(double EB=7.546, double t=-0.55, double phi_deg=0.0,
 
 // Auto-run entry point
 void dvcs_kin(){
-  double t   = -0.250;
-  double phi = 180.0;
+  double t   = -0.150;
+  double phi = 0.0;
   double EB  = 7.546;
 
   double xB  = 0.23;
@@ -478,6 +478,6 @@ void dvcs_kin(){
                true,   // custom grid
                5, 80.0,   // z range
                true,  25.0, 25.0,  kRed, 0.50,     // gamma band (lo,hi,color,alpha)
-               true,  0,  40.0,  kBlack, 0.50, // proton band (lo,hi,color,alpha)
+               true,  57,  62.0,  kBlack, 0.50, // proton band (lo,hi,color,alpha)
                "theta_p_map.pdf");
 }

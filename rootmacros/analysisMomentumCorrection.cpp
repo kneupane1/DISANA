@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <TMultiGraph.h>
 #include <TLegend.h>
+#include <TLatex.h>
 #include <array>
 #include <limits>
 
@@ -195,6 +196,51 @@ static std::vector<std::pair<double,double>> MidpointsToBinEdges(const std::vect
         edges[i] = {lo, hi};
     }
     return edges;
+}
+
+static std::string AxisTitle1D(const std::string& name) {
+    if (name == "theta") return "#theta [deg]";
+    if (name == "phi") return "#phi [deg]";
+    if (name == "p") return "p [GeV]";
+    if (name == "vz") return "v_{z} [cm]";
+    if (name == "beta") return "#beta";
+    return name;
+}
+
+static void ApplyPublicationHistStyle(TH1D* h,
+                                      const std::string& varName)
+{
+    h->SetTitle("");
+    h->SetStats(0);
+    h->SetLineColor(kAzure + 2);
+    h->SetLineWidth(3);
+    h->SetFillStyle(0);
+    h->SetFillColor(0);
+    h->SetMarkerStyle(20);
+    h->SetMarkerSize(0.6);
+
+    h->GetXaxis()->SetTitle(AxisTitle1D(varName).c_str());
+    h->GetYaxis()->SetTitle("Counts");
+    h->GetXaxis()->CenterTitle(false);
+    h->GetYaxis()->CenterTitle(false);
+
+    h->GetXaxis()->SetTitleFont(42);
+    h->GetYaxis()->SetTitleFont(42);
+    h->GetXaxis()->SetLabelFont(42);
+    h->GetYaxis()->SetLabelFont(42);
+    h->GetXaxis()->SetTitleSize(0.052);
+    h->GetYaxis()->SetTitleSize(0.052);
+    h->GetXaxis()->SetLabelSize(0.044);
+    h->GetYaxis()->SetLabelSize(0.044);
+    h->GetXaxis()->SetTitleOffset(1.05);
+    h->GetYaxis()->SetTitleOffset(1.38);
+    h->GetYaxis()->SetMaxDigits(3);
+
+    const double ymax = h->GetMaximum();
+    h->SetMinimum(0.0);
+    h->SetMaximum(ymax > 0.0 ? ymax * 1.28 : 1.0);
+
+    h->Draw("HIST");
 }
 
 // Core evaluator for Δp given p, θ and quadratic-in-θ parameter sets
@@ -906,6 +952,7 @@ void DrawParticleKinematicsByThetaBins(
                 else if (v.name=="vz") value = vz[i];  // assuming vz is the same as p for this example
                 else if (v.name=="beta") value = beta[i];
                 if (std::isnan(value)) continue;
+                if (value == -3 && v.name=="vz" ) continue;
                 v.binHists[ti]->Fill(value);
                 v.overall->Fill(value);
             }
@@ -918,29 +965,32 @@ void DrawParticleKinematicsByThetaBins(
 
     //==== draw and save ====
     for (auto &v: vars) {
+        if (v.name == "vz") {
+            v.overall->Rebin(2);
+            for (auto *h : v.binHists) h->Rebin(2);
+        }
+
         // overall
         {
-            TCanvas *c = new TCanvas(("c_"+v.name+"_overall").c_str(),"",1600,1200);
-            v.overall->SetTitle((selecteddetector + " " +v.title + " " + v.name).c_str());
-            if (v.name == "phi" || v.name == "theta") v.overall->GetXaxis()->SetTitle((v.name+" [deg]").c_str());
-            else v.overall->GetXaxis()->SetTitle((v.name+" GeV").c_str());
-            v.overall->GetYaxis()->SetTitle("Counts");
-            v.overall->Draw();
+            TCanvas *c = new TCanvas(("c_"+v.name+"_overall").c_str(),"",1000,800);
+            c->SetMargin(0.16, 0.04, 0.14, 0.06);
+            c->SetTicks(1, 1);
+            ApplyPublicationHistStyle(v.overall, v.name);
             std::string out = outDir + "/" + v.saveName + "_" +selecteddetector+ "_" + v.name + "_overall.png";
             c->SaveAs(out.c_str());
+            c->SaveAs((outDir + "/" + v.saveName + "_" +selecteddetector+ "_" + v.name + "_overall.pdf").c_str());
             delete c;
             std::cout << "Saved: " << out << std::endl;
         }
         // theta bins
         for (size_t ti=0; ti<=thetaCuts.size(); ++ti) {
-            TCanvas *c = new TCanvas(("c_"+v.name+Form("_T%zu",ti)).c_str(),"",1600,1200);
-            if (v.name == "phi" || v.name == "theta") v.binHists[ti]->GetXaxis()->SetTitle((v.name+ " [deg]").c_str());
-            else v.binHists[ti]->GetXaxis()->SetTitle((v.name+" [GeV]").c_str()); 
-            v.binHists[ti]->SetTitle((selecteddetector + " " + v.title+" "+v.name + " in " + GetThetaBinLabel(ti, thetaCuts)).c_str());
-            v.binHists[ti]->GetYaxis()->SetTitle("Counts");
-            v.binHists[ti]->Draw();
+            TCanvas *c = new TCanvas(("c_"+v.name+Form("_T%zu",ti)).c_str(),"",1000,800);
+            c->SetMargin(0.16, 0.04, 0.14, 0.06);
+            c->SetTicks(1, 1);
+            ApplyPublicationHistStyle(v.binHists[ti], v.name);
             std::string out = outDir + "/" + v.saveName + "_" + selecteddetector + "_" + v.name + Form("_T%zu.png",ti);
             c->SaveAs(out.c_str());
+            c->SaveAs((outDir + "/" + v.saveName + "_" + selecteddetector + "_" + v.name + Form("_T%zu.pdf",ti)).c_str());
             delete c;
             std::cout << "Saved: " << out << std::endl;
         }
@@ -3171,7 +3221,7 @@ void DrawDeltaPByThetaPhiBins(
 void analysisMomentumCorrection() {
      ROOT::EnableImplicitMT(6); 
     //std::string path = "/work/clas12/yijie/clas12ana/analysis801/DISANA/build/nobkg/";
-    std::string path = "../build/File7546/data/";
+    std::string path = "../build/ProtonECorrUnifyPhi/";
     //std::string path = "/w/hallb-scshelf2102/clas12/singh/Softwares/DISANA_main/data_processed/sims/clasdis/outb/";
     //std::string path = "/w/hallb-scshelf2102/clas12/singh/Softwares/DISANA_main/data_processed/sims/clasdis/spring2018/outb/";
     //std::string path = "/w/hallb-scshelf2102/clas12/singh/Softwares/DISANA_main/data_processed/sims/clasdis/spring2018/inb/";
@@ -3228,19 +3278,22 @@ void analysisMomentumCorrection() {
         {"electron","electron","theta", 500, 0, 60},
         {"electron","electron","phi",   500, 0, 360},
         {"electron","electron","p",     500, 0, 8.0},
-        {"electron","electron","beta",  500, 0, 2.0}
+        {"electron","electron","beta",  500, 0, 2.0},
+        {"electron","electron","vz",  500, -10, 4.0}
     };
     std::vector<std::tuple<std::string,std::string,std::string,int,double,double>> plotVarsAllphoton = {
         {"photon","photon","theta", 500, 0, 60},
         {"photon","photon","phi",   500, 0, 360},
         {"photon","photon","p",     500, 0, 8.0},
-        {"photon","photon","beta",  500, 0, 2.0}
+        {"photon","photon","beta",  500, 0, 2.0},
+        {"photon","photon","vz",  500, -10, 4.0}
     };
     std::vector<std::tuple<std::string,std::string,std::string,int,double,double>> plotVarsAllproton = {
         {"proton","proton","theta", 500, 0, 150},
         {"proton","proton","phi",   500, 0, 360},
         {"proton","proton","p",     500, 0, 3.0},
-        {"proton","proton","beta",  500, 0, 2.0}
+        {"proton","proton","beta",  500, 0, 2.0},
+        {"proton","proton","vz",  500, -10, 4.0}
     };
 /*
     DrawParticleKinematicsByThetaBins(22, {0}, "ALL", plotVarsAllphoton, filename, treename); // photon
@@ -3292,27 +3345,28 @@ void analysisMomentumCorrection() {
     DrawDeltaPByThetaBins(11,thetaCutsFTelectron,"FT",{{"electron_deltaP_vs_p","electron #delta p vs p","deltaP:p",500,0,8,500,-1.0,1.0}},filename,treename);
     DrawDeltaPByThetaBins(11,{0},"ALL",{{"electron_deltaP_vs_p","electron #delta p vs p","deltaP:p",500,0,8,500,-0.1,0.1}},filename,treename);
   */
-
-    //Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,0,60}},filename,treename);
+/*
+    Draw2DParticleKinematicsByThetaBins(2212,{0},"ALL",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,0,80}},filenameCorrected,treenameCorrected);
     Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_phi_vs_theta","proton phi vs theta","phi:theta",500,0,360,500,0,60}},filenameCorrected,treenameCorrected);
-    //Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,20,150}},filename,treename);
+    Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_p_vs_theta","proton p vs theta","p:theta",500,0,5,500,20,150}},filenameCorrected,treenameCorrected);
     Draw2DParticleKinematicsByThetaBins(2212,{0},"CD",{{"proton_phi_vs_theta","proton phi vs theta","phi:theta",500,0,360,500,20,150}},filenameCorrected,treenameCorrected);
-    //Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_p_vs_theta","proton p vs theta","p:theta",200,0.4,2,200,10,50}},filenameCorrected,treenameCorrected);
- 
+    Draw2DParticleKinematicsByThetaBins(2212,{0},"FD",{{"proton_p_vs_theta","proton p vs theta","p:theta",200,0.4,2,200,10,50}},filenameCorrected,treenameCorrected);
+ */
    
     //DrawDeltaPByThetaBins(2212,thetaCutsFDproton,"FD",{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,3,100,-0.05,0.05}},filename,treename,outDir, isOutBend);
     //DrawDeltaPByThetaBins(2212,thetaCutsCDproton,"CD",{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.01,2.5,100,-0.2,0.2}},filename,treename,outDir, isOutBend);
     //DrawDeltaPByThetaBins(2212,{0},"ALL",{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0,8,100,-0.1,0.1}},filename,treename,outDir, isOutBend);
     //DrawDeltaPByThetaBins(2212,thetaCutsFDproton,"FD",{{"proton_deltaP_vs_pcorr","corrected proton #delta p vs p","deltaP:p",100,0,2.5,100,-0.1,0.1}},filenameCorrected,treenameCorrected);
     //DrawDeltaPByThetaBins(2212,thetaCutsCDproton,"CD",{{"proton_deltaP_vs_pcorr","corrected proton #delta p vs p","deltaP:p",100,0,2.5,100,-0.2,0.2}},filenameCorrected,treenameCorrected);
-/*
+
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",1,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filename,treename,"ProtonMomCorr",isOutBend,true);
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",1,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filenameCorrected,treenameCorrected,"ProtonMomCorrPhiCorrected",isOutBend,false);
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",36,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filename,treename,"ProtonMomCorrPhi36",isOutBend,true);
     DrawDeltaPByThetaPhiBins(2212,thetaCutsFDproton,"FD",36,-37,{{"proton_deltaP_vs_p","proton #delta p vs p","deltaP:p",100,0.2,5,100,-0.1,0.1}},filenameCorrected,treenameCorrected,"ProtonMomCorrPhiCorrected36",isOutBend,false);
+
     PlotMomentumCorrectionVsPhi_MultiP_FromParamVsPhiPoints(2212,"FD",{0.8, 1.0, 1.5, 2.0},"ProtonMomCorrPhi36","from_txt");
     PlotMomentumCorrectionVsPhi_MultiP_FromParamVsPhiPoints(2212,"FD",{0.8, 1.0, 1.5, 2.0},"ProtonMomCorrPhiCorrected36","from_txt");
-*/
+
     //GeneratePiecewiseProtonCorrectionFunctionFromParamVsPhi(
     //    "ProtonMomCorrPhi36",
     //    "ProtonMomCorrPhi36/GeneratedPiecewiseProtonCorrection_RunDVCSAnalysis.inc",

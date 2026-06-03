@@ -9,19 +9,16 @@ setopt NO_NOMATCH
 # =========================
 K=40   # 并行 job 数
 MAX_CONCURRENT=40   # 同时最多跑多少个，防止机器打满
+OUTPUT_W_CSV=1      # 设为 1 或使用 --w-csv：只输出 corrected W CSV，不输出 ROOT
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 EXE="$SCRIPT_DIR/../build/AnalysisDVCS"
 OUTPUT_BASE="$SCRIPT_DIR/../build/dvcs_parallel_output"
 typeset -a INPUT_DIRS
 INPUT_DIRS=(
-  /volatile/clas12/osg/yijie/10833/
-  /volatile/clas12/osg/yijie/10834/
-  /volatile/clas12/osg/yijie/10836/
-  /volatile/clas12/osg/yijie/10837/
-  /volatile/clas12/osg/yijie/10838/
+  /cache/clas12/rg-k/production/recon/fall2018/torus+1/7546MeV/pass2/v0/dst/recon/*/
 )
-MAX_TOTAL_FILES=10000000000000
+MAX_TOTAL_FILES=10000000000
 
 # AnalysisDVCS 第3个参数
 ARG3=1
@@ -41,6 +38,40 @@ CSV_FILES=(
 )
 
 SUCCESS_GREP='Finished processing all events'
+
+usage() {
+  cat <<EOF
+Usage: $0 [--w-csv]
+
+Options:
+  --w-csv, --output-w-csv   Run AnalysisDVCS in corrected-W CSV-only mode.
+  --help, -h               Show this help message.
+EOF
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --w-csv|--output-w-csv)
+      OUTPUT_W_CSV=1
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[ERROR] Unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+if (( OUTPUT_W_CSV )); then
+  OUTPUT_FILES=()
+  CSV_FILES=(electron_w_afterCorr.csv)
+  SUCCESS_GREP='Wrote final corrected electron W CSV'
+fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORKDIR="$OUTPUT_BASE/jobs_${TIMESTAMP}"
@@ -68,6 +99,7 @@ workdir=$WORKDIR
 K=$K
 max_concurrent=$MAX_CONCURRENT
 arg3=$ARG3
+output_w_csv=$OUTPUT_W_CSV
 success_grep=$SUCCESS_GREP
 
 root_outputs=${(j:,:)OUTPUT_FILES}
@@ -134,7 +166,7 @@ for input_dir in "${INPUT_DIRS[@]}"; do
   fi
 done
 
-if ! command -v hadd >/dev/null 2>&1; then
+if (( ! OUTPUT_W_CSV )) && ! command -v hadd >/dev/null 2>&1; then
   echo "[ERROR] hadd not found. Please source ROOT first."
   exit 1
 fi
@@ -161,6 +193,7 @@ log_msg "[INFO] WORKDIR        = $WORKDIR"
 log_msg "[INFO] K              = $K"
 log_msg "[INFO] MAX_CONCURRENT = $MAX_CONCURRENT"
 log_msg "[INFO] ARG3           = $ARG3"
+log_msg "[INFO] OUTPUT_W_CSV   = $OUTPUT_W_CSV"
 
 # =========================
 # Collect input files
@@ -267,10 +300,19 @@ for kid in "${JOBS_TO_RUN[@]}"; do
     echo "[INFO] Working directory: $OUTDIR"
     echo "[INFO] Input directory: $INDIR"
     echo "[INFO] Number of files passed to AnalysisDVCS: $NFILES"
-    echo "[INFO] Full command: $EXE $INDIR $NFILES $ARG3"
+    if (( OUTPUT_W_CSV )); then
+      echo "[INFO] CSV-only W output mode enabled."
+      echo "[INFO] Full command: DISANA_OUTPUT_W_CSV=1 $EXE $INDIR $NFILES $ARG3"
+    else
+      echo "[INFO] Full command: $EXE $INDIR $NFILES $ARG3"
+    fi
     echo "[INFO] Input file list:"
     cat "$JOBDIR/input_files.txt"
-    "$EXE" "$INDIR" "$NFILES" "$ARG3"
+    if (( OUTPUT_W_CSV )); then
+      DISANA_OUTPUT_W_CSV=1 "$EXE" "$INDIR" "$NFILES" "$ARG3"
+    else
+      "$EXE" "$INDIR" "$NFILES" "$ARG3"
+    fi
   ) &> "$LOG" &
 
   pid=$!
@@ -325,6 +367,12 @@ for kid in "${JOBS_TO_RUN[@]}"; do
     for f in "${CSV_FILES[@]}"; do
       [[ -s "$OUTDIR/$f" ]] && ((csv_found++))
     done
+  fi
+
+  if (( OUTPUT_W_CSV )); then
+    (( csv_found > 0 )) && ok_this_job=1
+  else
+    (( root_found > 0 )) && ok_this_job=1
   fi
 
   if (( ok_this_job )); then

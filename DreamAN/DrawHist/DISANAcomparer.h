@@ -3,9 +3,18 @@
 
 // ROOT headers
 #include <TCanvas.h>
+#include <TF1.h>
+#include <TGraphErrors.h>
 #include <TLegend.h>
+#include <TH2D.h>
+#include <TLine.h>
+#include <TVector3.h>
+#include <TVirtualFitter.h>
 #include <sys/stat.h>
 // STL headers
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -15,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Project-specific headers
@@ -40,6 +50,13 @@ class DISANAcomparer {
   // Set the bin ranges used for cross-section calculations and plotting
   void SetXBinsRanges(BinManager bins) { fXbins = bins; }
 
+  void SetDVCSWeightFunction(DVCSWeightFunction weightFunc) {
+    dvcs_weight_function_ = std::move(weightFunc);
+    for (auto& plotter : plotters) {
+      plotter->SetDVCSWeightFunction(dvcs_weight_function_);
+    }
+  }
+
   void NormalizeHistogram(TH1* hist) {
     if (!hist) return;
     double integral = hist->Integral();
@@ -61,6 +78,7 @@ class DISANAcomparer {
     plotter->SetPlotApplyEfficiencyCorrection(fEfficiencyCorrection);
     plotter->SetPlotApplyRadiativeCorrection(fRadiativeCorrection);
     plotter->SetPlotApplyP1Cut(fP1cut);
+    plotter->SetDVCSWeightFunction(dvcs_weight_function_);
     plotter->GenerateKinematicHistos("el");
     plotter->GenerateKinematicHistos("pro");
     plotter->GenerateKinematicHistos("pho");
@@ -75,6 +93,7 @@ class DISANAcomparer {
   void AddModel(ROOT::RDF::RNode df, const std::string& label, double beamEnergy, double luminosity = 1.0) {
     auto plotter = std::make_unique<DISANAplotter>(DVCSModeTag{}, df, beamEnergy, luminosity);
     std::cout << "Adding model: " << label << " with beam energy: " << beamEnergy << " GeV without Pi0 Correction" << std::endl;
+    plotter->SetDVCSWeightFunction(dvcs_weight_function_);
     plotter->GenerateKinematicHistos("el");
     plotter->GenerateKinematicHistos("pro");
     plotter->GenerateKinematicHistos("pho");
@@ -142,6 +161,662 @@ class DISANAcomparer {
 
   // Enable or disable correctio
   void SetApplyCorrection(bool apply) { applyCorrection = apply; }
+
+  void PlotMomentumCorrection(const std::string& subdir = "MomentumCorrection") {
+    const std::string outdir = outputDir + "/" + subdir;
+    const std::string ratioHistDir = outdir + "/trueOverExpHist2D";
+    fs::create_directories(outdir);
+    fs::create_directories(ratioHistDir);
+
+    constexpr double kElectronMass = 0.00051099895;
+    constexpr double kProtonMass = 0.9382720813;
+    constexpr double kRadToDeg = 180.0 / M_PI;
+
+    auto cleanLabel = [](std::string s) {
+      for (auto& ch : s) {
+        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_' && ch != '-') ch = '_';
+      }
+      return s;
+    };
+
+    auto unitFromAngles = [](double theta, double phi) {
+      return TVector3(std::sin(theta) * std::cos(phi),
+                      std::sin(theta) * std::sin(phi),
+                      std::cos(theta));
+    };
+
+    struct PlotSpec {
+      std::string tag;
+      std::string ref;
+      std::string calc;
+      std::string title;
+      std::string detectorColumn;
+      int bins;
+      double min;
+      double max;
+    };
+    const std::vector<PlotSpec> specs = {
+        {"Q2", "Q2", "momcorr_Q2", "Q^{2} [GeV^{2}]", "", 180, 0.0, 10.0},
+        {"xB", "xB", "momcorr_xB", "x_{B}", "", 160, 0.0, 1.0},
+        {"t", "momcorr_ref_abs_t", "momcorr_t", "|t| [GeV^{2}]", "", 180, 0.0, 2.0},
+        {"phi", "phi", "momcorr_phi", "#phi_{BMK} [deg]", "", 180, 0.0, 360.0},
+        {"photonE", "recpho_p", "momcorr_pho_E", "E_{#gamma} [GeV]", "pho_det_region", 180, 1.5, 7.0},
+        {"protonP", "recpro_p", "momcorr_pro_p", "p_{p} [GeV]", "pro_det_region", 180, 0.0, 1.5},
+    };
+    const std::vector<std::pair<int, std::string>> detectorCases = {
+        {0, "FT"},
+        {1, "FD"},
+        {2, "CD"},
+    };
+    auto detectorAllowed = [](const std::string& tag, int detector) {
+      if (tag == "photonE") return detector == 0 || detector == 1;  // photon: FT, FD
+      if (tag == "protonP") return detector == 1 || detector == 2;  // proton: FD, CD
+      return true;
+    };
+    auto thetaRangeFor = [](const std::string& tag, int detector) {
+      if (tag == "photonE" && detector == 0) return std::pair<double, double>{2.0, 5.0};
+      if (tag == "photonE" && detector == 1) return std::pair<double, double>{0.0, 40.0};
+      if (tag == "protonP" && detector == 1) return std::pair<double, double>{10.0, 50.0};
+      if (tag == "protonP" && detector == 2) return std::pair<double, double>{30.0, 80.0};
+      return std::pair<double, double>{0.0, 70.0};
+    };
+    auto ratioXBinsFor = [](const std::string& tag, int detector, const std::string& xTag) {
+      if (tag == "photonE" && detector == 0 && xTag == "theta") return 20;  // photon FT theta
+      if (tag == "photonE" && detector == 0 && xTag == "phi") return 36;    // photon FT phi
+      if (tag == "photonE" && detector == 1 && xTag == "theta") return 10;  // photon FD theta
+      if (tag == "photonE" && detector == 1 && xTag == "phi") return 18;    // photon FD phi
+      if (tag == "protonP" && detector == 1 && xTag == "theta") return 12;  // proton FD theta
+      if (tag == "protonP" && detector == 1 && xTag == "phi") return 12;    // proton FD phi
+      if (tag == "protonP" && detector == 2 && xTag == "theta") return 20;  // proton CD theta
+      if (tag == "protonP" && detector == 2 && xTag == "phi") return 18;    // proton CD phi
+      return 50;
+    };
+    auto ratioHistXBinsFor = [](const std::string& tag, int detector, const std::string& xTag) {
+      if (tag == "photonE" && detector == 0 && xTag == "theta") return 120;  // photon FT theta 2D
+      if (tag == "photonE" && detector == 0 && xTag == "phi") return 180;    // photon FT phi 2D
+      if (tag == "photonE" && detector == 1 && xTag == "theta") return 160;  // photon FD theta 2D
+      if (tag == "photonE" && detector == 1 && xTag == "phi") return 180;    // photon FD phi 2D
+      if (tag == "protonP" && detector == 1 && xTag == "theta") return 160;  // proton FD theta 2D
+      if (tag == "protonP" && detector == 1 && xTag == "phi") return 180;    // proton FD phi 2D
+      if (tag == "protonP" && detector == 2 && xTag == "theta") return 160;  // proton CD theta 2D
+      if (tag == "protonP" && detector == 2 && xTag == "phi") return 180;    // proton CD phi 2D
+      return 180;
+    };
+    auto minFitEntriesFor = [](const std::string& tag, int detector, const std::string& xTag) {
+      if (tag == "photonE" && detector == 0 && xTag == "theta") return 25;
+      if (tag == "photonE" && detector == 0 && xTag == "phi") return 25;
+      if (tag == "photonE" && detector == 1 && xTag == "theta") return 50;
+      if (tag == "photonE" && detector == 1 && xTag == "phi") return 50;
+      if (tag == "protonP" && detector == 1 && xTag == "theta") return 50;
+      if (tag == "protonP" && detector == 1 && xTag == "phi") return 50;
+      if (tag == "protonP" && detector == 2 && xTag == "theta") return 40;
+      if (tag == "protonP" && detector == 2 && xTag == "phi") return 40;
+      return 50;
+    };
+    const std::vector<std::pair<double, double>> photonEnergyRanges = {
+        {2.0, 2.5},
+        {2.5, 3.0},
+        {3.0, 3.5},
+        {3.5, 4.0},
+        {4.0, 4.5},
+        {4.5, 5.0},
+        {5.0, 5.5},
+    };
+    const std::vector<std::pair<double, double>> protonMomentumRanges = {
+        {0.2, 0.4},
+        {0.4, 0.6},
+        {0.6, 0.8},
+        {0.8, 1.0},
+        {1.0, 1.2},
+    };
+    auto rangeTag = [](double min, double max) {
+      std::string s = Form("_%.2f_%.2f", min, max);
+      for (auto& ch : s) {
+        if (ch == '.') ch = 'p';
+        if (ch == '-') ch = 'm';
+      }
+      return s;
+    };
+    struct RatioPlotSpec {
+      std::string tag;
+      std::string ratio;
+      std::string particle;
+      std::string detectorColumn;
+      std::string thetaColumn;
+      std::string phiColumn;
+      std::string rangeColumn;
+      std::string rangeTitle;
+      std::vector<std::pair<double, double>> ranges;
+    };
+    const std::vector<RatioPlotSpec> ratioSpecs = {
+        {"photonE", "momcorr_pho_E_over_recpho_p", "#gamma", "pho_det_region", "recpho_theta_deg", "recpho_phi_deg", "recpho_p", "E_{#gamma}", photonEnergyRanges},
+        {"protonP", "momcorr_pro_p_over_recpro_p", "p", "pro_det_region", "recpro_theta_deg", "recpro_phi_deg", "recpro_p", "p_{p}", protonMomentumRanges},
+    };
+
+    for (size_t imodel = 0; imodel < plotters.size(); ++imodel) {
+      const std::string label = imodel < labels.size() ? labels[imodel] : Form("model_%zu", imodel);
+      const std::string tag = cleanLabel(label);
+      const double modelBeamEnergy = plotters[imodel]->GetBeamEnergy();
+
+      auto q2FromElectron = [=](double p, double theta) {
+        if (p <= 0.0 || theta < 0.0) return std::numeric_limits<double>::quiet_NaN();
+        const double eprime = std::sqrt(p * p + kElectronMass * kElectronMass);
+        return 2.0 * modelBeamEnergy * (eprime - p * std::cos(theta)) - kElectronMass * kElectronMass;
+      };
+
+      auto nuFromElectron = [=](double p) {
+        if (p <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        const double eprime = std::sqrt(p * p + kElectronMass * kElectronMass);
+        return modelBeamEnergy - eprime;
+      };
+
+      auto xBFromElectron = [=](double p, double theta) {
+        const double q2 = q2FromElectron(p, theta);
+        const double nu = nuFromElectron(p);
+        if (!std::isfinite(q2) || !std::isfinite(nu) || nu <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        return q2 / (2.0 * kProtonMass * nu);
+      };
+
+      auto qVector = [=](double p, double theta, double phi) {
+        const TVector3 kin(0.0, 0.0, modelBeamEnergy);
+        const TVector3 kout = p * unitFromAngles(theta, phi);
+        return kin - kout;
+      };
+
+      auto tFromElectronPhotonAngles = [=](double p, double theta, double phi, double phoTheta, double phoPhi) {
+        const double q2 = q2FromElectron(p, theta);
+        const double nu = nuFromElectron(p);
+        const TVector3 qvec = qVector(p, theta, phi);
+        const TVector3 ghat = unitFromAngles(phoTheta, phoPhi);
+        const double qmag = qvec.Mag();
+        if (!std::isfinite(q2) || !std::isfinite(nu) || nu <= 0.0 || qmag <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+
+        double cosThetaGG = qvec.Dot(ghat) / qmag;
+        cosThetaGG = std::max(-1.0, std::min(1.0, cosThetaGG));
+        const double sqrtNuQ = std::sqrt(nu * nu + q2);
+        const double numerator = q2 * kProtonMass + 2.0 * nu * kProtonMass * (nu - sqrtNuQ * cosThetaGG);
+        const double denominator = sqrtNuQ * cosThetaGG - nu - kProtonMass;
+        if (std::abs(denominator) < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+        return std::abs(numerator / denominator);
+      };
+
+      auto phiBMKFromElectronPhotonAngles = [=](double p, double theta, double phi, double phoTheta, double phoPhi) {
+        const TVector3 kin(0.0, 0.0, modelBeamEnergy);
+        const TVector3 kout = p * unitFromAngles(theta, phi);
+        const TVector3 qvec = kin - kout;
+        const TVector3 gvec = unitFromAngles(phoTheta, phoPhi);
+        if (qvec.Mag() <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+
+        const TVector3 nL = kin.Cross(kout).Unit();
+        const TVector3 nH = gvec.Cross(qvec).Unit();
+        if (nL.Mag() <= 0.0 || nH.Mag() <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        const double cosPhi = std::max(-1.0, std::min(1.0, nL.Dot(nH)));
+        const double sinPhi = (nL.Cross(nH)).Dot(qvec.Unit());
+        return (std::atan2(sinPhi, cosPhi) + M_PI) * kRadToDeg;
+      };
+
+      auto photonEnergyFromElectronPhotonAngles = [=](double p, double theta, double phi, double phoTheta, double phoPhi) {
+        const double q2 = q2FromElectron(p, theta);
+        const double absT = tFromElectronPhotonAngles(p, theta, phi, phoTheta, phoPhi);
+        const double nu = nuFromElectron(p);
+        const TVector3 qvec = qVector(p, theta, phi);
+        const TVector3 ghat = unitFromAngles(phoTheta, phoPhi);
+        const double qmag = qvec.Mag();
+        if (!std::isfinite(q2) || !std::isfinite(absT) || !std::isfinite(nu) || qmag <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+
+        double cosThetaGG = qvec.Dot(ghat) / qmag;
+        cosThetaGG = std::max(-1.0, std::min(1.0, cosThetaGG));
+        const double denominator = 2.0 * (qmag * cosThetaGG - nu);
+        if (std::abs(denominator) < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+        const double egamma = (q2 - absT) / denominator;
+        return egamma > 0.0 ? egamma : std::numeric_limits<double>::quiet_NaN();
+      };
+
+      auto protonMomentumFromElectronPhotonAngles = [=](double p, double theta, double phi, double phoTheta, double phoPhi) {
+        const double egamma = photonEnergyFromElectronPhotonAngles(p, theta, phi, phoTheta, phoPhi);
+        if (!std::isfinite(egamma)) return std::numeric_limits<double>::quiet_NaN();
+        const TVector3 qvec = qVector(p, theta, phi);
+        const TVector3 gvec = egamma * unitFromAngles(phoTheta, phoPhi);
+        return (qvec - gvec).Mag();
+      };
+
+      auto df = plotters[imodel]->GetRDF()
+          .Define("momcorr_Q2", q2FromElectron, {"recel_p", "recel_theta"})
+          .Define("momcorr_xB", xBFromElectron, {"recel_p", "recel_theta"})
+          .Define("momcorr_t", tFromElectronPhotonAngles, {"recel_p", "recel_theta", "recel_phi", "recpho_theta", "recpho_phi"})
+          .Define("momcorr_phi", phiBMKFromElectronPhotonAngles, {"recel_p", "recel_theta", "recel_phi", "recpho_theta", "recpho_phi"})
+          .Define("momcorr_pho_E", photonEnergyFromElectronPhotonAngles, {"recel_p", "recel_theta", "recel_phi", "recpho_theta", "recpho_phi"})
+          .Define("momcorr_pro_p", protonMomentumFromElectronPhotonAngles, {"recel_p", "recel_theta", "recel_phi", "recpho_theta", "recpho_phi"})
+          .Define("momcorr_ref_abs_t", [](double t) { return std::abs(t); }, {"t"})
+          .Define("momcorr_pho_E_over_recpho_p",
+                  [](double calc, double rec) {
+                    return (std::isfinite(calc) && std::isfinite(rec) && rec > 0.0)
+                               ? calc / rec
+                               : std::numeric_limits<double>::quiet_NaN();
+                  },
+                  {"momcorr_pho_E", "recpho_p"})
+          .Define("momcorr_pro_p_over_recpro_p",
+                  [](double calc, double rec) {
+                    return (std::isfinite(calc) && std::isfinite(rec) && rec > 0.0)
+                               ? calc / rec
+                               : std::numeric_limits<double>::quiet_NaN();
+                  },
+                  {"momcorr_pro_p", "recpro_p"})
+          .Define("recpho_theta_deg", [](double theta) { return theta * 180.0 / M_PI; }, {"recpho_theta"})
+          .Define("recpro_theta_deg", [](double theta) { return theta * 180.0 / M_PI; }, {"recpro_theta"})
+          .Define("recpho_phi_deg",
+                  [](double phi) {
+                    double phiDeg = phi * 180.0 / M_PI;
+                    while (phiDeg < 0.0) phiDeg += 360.0;
+                    while (phiDeg >= 360.0) phiDeg -= 360.0;
+                    return phiDeg;
+                  },
+                  {"recpho_phi"})
+          .Define("recpro_phi_deg",
+                  [](double phi) {
+                    double phiDeg = phi * 180.0 / M_PI;
+                    while (phiDeg < 0.0) phiDeg += 360.0;
+                    while (phiDeg >= 360.0) phiDeg -= 360.0;
+                    return phiDeg;
+                  },
+                  {"recpro_phi"});
+
+      std::map<std::string, std::unique_ptr<TGraphErrors>> a0VsMomentumGraphs;
+      std::map<std::string, std::unique_ptr<TGraphErrors>> a1VsMomentumGraphs;
+      std::map<std::string, std::string> paramGraphTitles;
+      std::map<std::string, std::string> paramGraphXTitles;
+
+      auto shouldCollectThetaParam = [](const std::string& ratioTag, int detector, const std::string& xTag, const std::string& rangeName) {
+        if (xTag != "theta" || rangeName == "_all") return false;
+        if (ratioTag == "photonE") return detector == 0 || detector == 1;  // photon FT/FD
+        if (ratioTag == "protonP") return detector == 1 || detector == 2;   // proton FD/CD
+        return false;
+      };
+
+      auto fillThetaParamGraphs = [&](const std::string& ratioTag, const std::string& detectorName,
+                                      const std::string& particleLabel, const std::string& rangeAxisTitle,
+                                      double rangeCenter, double rangeError, TF1* fit) {
+        if (!fit || !std::isfinite(rangeCenter) || !std::isfinite(rangeError) || rangeError <= 0.0) return;
+        const double a0Err = fit->GetParError(0);
+        if (!std::isfinite(a0Err) || a0Err > 0.1) return;
+
+        const std::string key = ratioTag + "_" + detectorName;
+        if (!a0VsMomentumGraphs.count(key)) {
+          a0VsMomentumGraphs[key] = std::make_unique<TGraphErrors>();
+          a1VsMomentumGraphs[key] = std::make_unique<TGraphErrors>();
+          a0VsMomentumGraphs[key]->SetName(Form("g_%s_%s_a0_vs_momentum", tag.c_str(), key.c_str()));
+          a1VsMomentumGraphs[key]->SetName(Form("g_%s_%s_a1_vs_momentum", tag.c_str(), key.c_str()));
+          paramGraphTitles[key] = Form("%s %s %s", label.c_str(), particleLabel.c_str(), detectorName.c_str());
+          paramGraphXTitles[key] = rangeAxisTitle + " [GeV]";
+        }
+
+        auto addPoint = [&](TGraphErrors* graph, double y, double ey) {
+          if (!graph || !std::isfinite(y) || !std::isfinite(ey)) return;
+          const int ip = graph->GetN();
+          graph->SetPoint(ip, rangeCenter, y);
+          graph->SetPointError(ip, rangeError, ey);
+        };
+
+        addPoint(a0VsMomentumGraphs[key].get(), fit->GetParameter(0), fit->GetParError(0));
+        addPoint(a1VsMomentumGraphs[key].get(), fit->GetParameter(1), fit->GetParError(1));
+      };
+
+      for (const auto& spec : specs) {
+        auto drawOne = [&](ROOT::RDF::RNode dfIn, const std::string& detTag, const std::string& detTitle) {
+          auto dfGood = dfIn.Filter([](double ref, double calc) {
+            return std::isfinite(ref) && std::isfinite(calc);
+          }, {spec.ref, spec.calc});
+
+          auto h = dfGood.Histo2D({Form("h_momcorr_%s_%s%s", tag.c_str(), spec.tag.c_str(), detTag.c_str()),
+                                   Form("%s%s;%s;%s from e momentum,angle and #gamma angle;Events",
+                                        label.c_str(), detTitle.c_str(), spec.title.c_str(), spec.title.c_str()),
+                                   spec.bins, spec.min, spec.max,
+                                   spec.bins, spec.min, spec.max},
+                                  spec.ref, spec.calc);
+
+          TCanvas c(Form("c_momcorr_%s_%s%s", tag.c_str(), spec.tag.c_str(), detTag.c_str()), "", 950, 850);
+          c.SetRightMargin(0.16);
+          c.SetLeftMargin(0.13);
+          c.SetBottomMargin(0.13);
+          h->SetStats(0);
+          h->Draw("COLZ");
+          TLine diag(spec.min, spec.min, spec.max, spec.max);
+          diag.SetLineColor(kRed + 1);
+          diag.SetLineStyle(2);
+          diag.SetLineWidth(2);
+          diag.Draw("SAME");
+          c.SaveAs(Form("%s/%s_%s%s_momentumCorrection2D.png", outdir.c_str(), tag.c_str(), spec.tag.c_str(), detTag.c_str()));
+        };
+
+        if (spec.detectorColumn.empty()) {
+          drawOne(df, "", "");
+          continue;
+        }
+
+        if (!df.HasColumn(spec.detectorColumn)) {
+          std::cerr << "[PlotMomentumCorrection] Column " << spec.detectorColumn
+                    << " not found for model " << label << "; drawing " << spec.tag
+                    << " without detector split.\n";
+          drawOne(df, "", "");
+          continue;
+        }
+
+        for (const auto& detCase : detectorCases) {
+          if (!detectorAllowed(spec.tag, detCase.first)) continue;
+          auto dfDet = df.Filter([region = detCase.first](int detRegion) {
+            return detRegion == region;
+          }, {spec.detectorColumn});
+          drawOne(dfDet, "_" + detCase.second, " " + detCase.second);
+        }
+      }
+
+      for (const auto& ratioSpec : ratioSpecs) {
+        if (!df.HasColumn(ratioSpec.detectorColumn)) {
+          std::cerr << "[PlotMomentumCorrection] Column " << ratioSpec.detectorColumn
+                    << " not found for model " << label << "; skipping " << ratioSpec.tag
+                    << " true/exp detector plots.\n";
+          continue;
+        }
+
+        for (const auto& detCase : detectorCases) {
+          if (!detectorAllowed(ratioSpec.tag, detCase.first)) continue;
+          auto dfDet = df.Filter([region = detCase.first](int detRegion) {
+            return detRegion == region;
+          }, {ratioSpec.detectorColumn});
+
+          auto drawRatio = [&](ROOT::RDF::RNode dfRange, const std::string& rangeName, const std::string& rangeTitle,
+                               double rangeCenter, double rangeError,
+                               const std::string& xColumn, const std::string& xTag,
+                               const std::string& xTitle, int histXBins, int fitXBins,
+                               double xMin, double xMax) {
+            const int minFitEntries = minFitEntriesFor(ratioSpec.tag, detCase.first, xTag);
+            auto dfGood = dfRange.Filter([](double x, double ratio) {
+              return std::isfinite(x) && std::isfinite(ratio);
+            }, {xColumn, ratioSpec.ratio});
+
+            auto h = dfGood.Histo2D({Form("h_momcorr_%s_%s_%s%s_vs_%s", tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()),
+                                     Form("%s %s %s %s;%s;%s true/exp;Events",
+                                          label.c_str(), ratioSpec.particle.c_str(), detCase.second.c_str(), rangeTitle.c_str(), xTitle.c_str(), ratioSpec.particle.c_str()),
+                                     histXBins, xMin, xMax,
+                                     160, 0.5, 1.5},
+                                    xColumn, ratioSpec.ratio);
+
+            TCanvas c(Form("c_momcorr_%s_%s_%s%s_vs_%s", tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()), "", 950, 850);
+            c.SetRightMargin(0.16);
+            c.SetLeftMargin(0.13);
+            c.SetBottomMargin(0.13);
+            h->SetStats(0);
+            h->Draw("COLZ");
+            TLine unity(xMin, 1.0, xMax, 1.0);
+            unity.SetLineColor(kRed + 1);
+            unity.SetLineStyle(2);
+            unity.SetLineWidth(2);
+            unity.Draw("SAME");
+            c.SaveAs(Form("%s/%s_%s_%s%s_trueOverExp_vs_%s_momentumCorrection2D.png",
+                          ratioHistDir.c_str(), tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()));
+
+            auto hFit = dfGood.Histo2D({Form("hfit_momcorr_%s_%s_%s%s_vs_%s", tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()),
+                                        Form("%s %s %s %s;%s;%s true/exp;Events",
+                                             label.c_str(), ratioSpec.particle.c_str(), detCase.second.c_str(), rangeTitle.c_str(), xTitle.c_str(), ratioSpec.particle.c_str()),
+                                        fitXBins, xMin, xMax,
+                                        160, 0.5, 1.5},
+                                       xColumn, ratioSpec.ratio);
+            TH2D* h2 = hFit.GetPtr();
+            TGraphErrors graph;
+            graph.SetName(Form("g_peak_%s_%s_%s%s_vs_%s", tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()));
+            graph.SetTitle(Form("%s %s %s %s;%s;%s peak true/exp",
+                                label.c_str(), ratioSpec.particle.c_str(), detCase.second.c_str(), rangeTitle.c_str(), xTitle.c_str(), ratioSpec.particle.c_str()));
+
+            int point = 0;
+            for (int ibin = 1; ibin <= h2->GetNbinsX(); ++ibin) {
+              std::unique_ptr<TH1D> proj(h2->ProjectionY(Form("py_%s_%s_%s%s_%s_%d",
+                                                              tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(),
+                                                              rangeName.c_str(), xTag.c_str(), ibin),
+                                                        ibin, ibin));
+              if (!proj || proj->GetEntries() < minFitEntries || proj->Integral() <= 0.0) continue;
+
+              const double mean = proj->GetMean();
+              const double rms = proj->GetRMS();
+              if (!std::isfinite(mean) || !std::isfinite(rms) || rms <= 0.0) continue;
+
+              TF1 gaus(Form("fit_%s_%s_%s%s_%s_%d",
+                            tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(),
+                            rangeName.c_str(), xTag.c_str(), ibin),
+                       "gaus", 0.5, 1.5);
+              gaus.SetParameters(proj->GetMaximum(), mean, rms);
+              const int fitStatus = proj->Fit(&gaus, "QNR");
+              const double peak = gaus.GetParameter(1);
+              const double peakErr = gaus.GetParError(1);
+              if (fitStatus != 0 || !std::isfinite(peak) || !std::isfinite(peakErr) || peakErr <= 0.0) continue;
+              if (peak < 0.5 || peak > 1.5) continue;
+
+              const double xCenter = h2->GetXaxis()->GetBinCenter(ibin);
+              const double xErr = 0.5 * h2->GetXaxis()->GetBinWidth(ibin);
+              graph.SetPoint(point, xCenter, peak);
+              graph.SetPointError(point, xErr, peakErr);
+              ++point;
+            }
+
+            TCanvas cFit(Form("c_peak_%s_%s_%s%s_vs_%s", tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()), "", 950, 850);
+            cFit.SetRightMargin(0.05);
+            cFit.SetLeftMargin(0.13);
+            cFit.SetBottomMargin(0.13);
+            TH1D frame(Form("frame_peak_%s_%s_%s%s_vs_%s", tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()),
+                       graph.GetTitle(), fitXBins, xMin, xMax);
+            frame.SetMinimum(0.5);
+            frame.SetMaximum(1.5);
+            frame.SetStats(0);
+            frame.Draw();
+            if (graph.GetN() > 3) {
+              auto* linearFit = new TF1(Form("linfit_%s_%s_%s%s_vs_%s",
+                                             tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(),
+                                             rangeName.c_str(), xTag.c_str()),
+                                        "[0]+[1]*x", xMin, xMax);
+              const int linearFitStatus = graph.Fit(linearFit, "QEX0");
+              if (linearFitStatus == 0) {
+                auto* fitBand = new TGraphErrors(200);
+                fitBand->SetName(Form("band_%s_%s_%s%s_vs_%s",
+                                      tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(),
+                                      rangeName.c_str(), xTag.c_str()));
+                for (int ip = 0; ip < 200; ++ip) {
+                  const double x = xMin + (xMax - xMin) * static_cast<double>(ip) / 199.0;
+                  fitBand->SetPoint(ip, x, linearFit->Eval(x));
+                  fitBand->SetPointError(ip, 0.0, 0.0);
+                }
+                TVirtualFitter* fitter = TVirtualFitter::GetFitter();
+                if (fitter) {
+                  fitter->GetConfidenceIntervals(fitBand, 0.68);
+                  fitBand->SetFillColorAlpha(kRed, 0.22);
+                  fitBand->SetLineColor(kRed);
+                  fitBand->SetBit(TObject::kCanDelete);
+                  fitBand->Draw("E3 SAME");
+                }
+                linearFit->SetLineColor(kRed + 1);
+                linearFit->SetLineWidth(3);
+                linearFit->SetBit(TObject::kCanDelete);
+                linearFit->Draw("SAME");
+                if (shouldCollectThetaParam(ratioSpec.tag, detCase.first, xTag, rangeName)) {
+                  fillThetaParamGraphs(ratioSpec.tag, detCase.second, ratioSpec.particle, ratioSpec.rangeTitle,
+                                       rangeCenter, rangeError, linearFit);
+                }
+              }
+            }
+            if (graph.GetN() > 0) {
+              graph.SetMarkerStyle(20);
+              graph.SetMarkerSize(0.8);
+              graph.SetMarkerColor(kBlack);
+              graph.SetLineColor(kBlack);
+              graph.Draw("P SAME");
+            }
+            TLine unityPeak(xMin, 1.0, xMax, 1.0);
+            unityPeak.SetLineColor(kGray + 2);
+            unityPeak.SetLineStyle(2);
+            unityPeak.SetLineWidth(2);
+            unityPeak.Draw("SAME");
+            cFit.SaveAs(Form("%s/%s_%s_%s%s_peakTrueOverExp_vs_%s_momentumCorrection.png",
+                             outdir.c_str(), tag.c_str(), ratioSpec.tag.c_str(), detCase.second.c_str(), rangeName.c_str(), xTag.c_str()));
+
+          };
+
+          const auto thetaRange = thetaRangeFor(ratioSpec.tag, detCase.first);
+          drawRatio(dfDet, "_all", "all", std::numeric_limits<double>::quiet_NaN(), 0.0,
+                    ratioSpec.thetaColumn, "theta", "#theta [deg]",
+                    ratioHistXBinsFor(ratioSpec.tag, detCase.first, "theta"),
+                    ratioXBinsFor(ratioSpec.tag, detCase.first, "theta"),
+                    thetaRange.first, thetaRange.second);
+          drawRatio(dfDet, "_all", "all", std::numeric_limits<double>::quiet_NaN(), 0.0,
+                    ratioSpec.phiColumn, "phi", "#phi [deg]",
+                    ratioHistXBinsFor(ratioSpec.tag, detCase.first, "phi"),
+                    ratioXBinsFor(ratioSpec.tag, detCase.first, "phi"),
+                    0.0, 360.0);
+          for (size_t irange = 0; irange < ratioSpec.ranges.size(); ++irange) {
+            const auto& range = ratioSpec.ranges[irange];
+            const bool lastRange = irange + 1 == ratioSpec.ranges.size();
+            auto dfRange = dfDet.Filter([min = range.first, max = range.second, lastRange](double value) {
+              return std::isfinite(value) && value >= min && (lastRange ? value <= max : value < max);
+            }, {ratioSpec.rangeColumn});
+            const std::string thisRangeTag = rangeTag(range.first, range.second);
+            const std::string thisRangeTitle = Form("%s [%.2f, %.2f%s GeV",
+                                                    ratioSpec.rangeTitle.c_str(), range.first, range.second, lastRange ? "]" : ")");
+            const double rangeCenter = 0.5 * (range.first + range.second);
+            const double rangeError = 0.5 * (range.second - range.first);
+            drawRatio(dfRange, thisRangeTag, thisRangeTitle, rangeCenter, rangeError,
+                      ratioSpec.thetaColumn, "theta", "#theta [deg]",
+                      ratioHistXBinsFor(ratioSpec.tag, detCase.first, "theta"),
+                      ratioXBinsFor(ratioSpec.tag, detCase.first, "theta"),
+                      thetaRange.first, thetaRange.second);
+            drawRatio(dfRange, thisRangeTag, thisRangeTitle, rangeCenter, rangeError,
+                      ratioSpec.phiColumn, "phi", "#phi [deg]",
+                      ratioHistXBinsFor(ratioSpec.tag, detCase.first, "phi"),
+                      ratioXBinsFor(ratioSpec.tag, detCase.first, "phi"),
+                      0.0, 360.0);
+          }
+        }
+      }
+
+      auto drawParamGraph = [&](TGraphErrors* graph, const std::string& key,
+                                const std::string& paramName, const std::string& yTitle) {
+        if (!graph || graph->GetN() <= 0) return;
+
+        double xMin = std::numeric_limits<double>::infinity();
+        double xMax = -std::numeric_limits<double>::infinity();
+        double yMin = std::numeric_limits<double>::infinity();
+        double yMax = -std::numeric_limits<double>::infinity();
+        for (int ip = 0; ip < graph->GetN(); ++ip) {
+          double x = 0.0;
+          double y = 0.0;
+          graph->GetPoint(ip, x, y);
+          const double ex = graph->GetErrorX(ip);
+          const double ey = graph->GetErrorY(ip);
+          xMin = std::min(xMin, x - ex);
+          xMax = std::max(xMax, x + ex);
+          yMin = std::min(yMin, y - ey);
+          yMax = std::max(yMax, y + ey);
+        }
+        if (!std::isfinite(xMin) || !std::isfinite(xMax) || xMax <= xMin) return;
+        if (paramName == "a0") {
+          yMin = 0.9;
+          yMax = 1.1;
+        } else if (paramName == "a1") {
+          yMin = -0.007;
+          yMax = 0.007;
+        } else if (!std::isfinite(yMin) || !std::isfinite(yMax) || yMax <= yMin) {
+          yMin -= 0.01;
+          yMax += 0.01;
+        }
+        const double yPad = (paramName == "a0" || paramName == "a1") ? 0.0 : std::max(1e-6, 0.18 * (yMax - yMin));
+
+        TCanvas cParam(Form("c_%s_%s_%s_vs_momentum", tag.c_str(), key.c_str(), paramName.c_str()), "", 950, 850);
+        cParam.SetRightMargin(0.05);
+        cParam.SetLeftMargin(0.14);
+        cParam.SetBottomMargin(0.13);
+        TH1D frame(Form("frame_%s_%s_%s_vs_momentum", tag.c_str(), key.c_str(), paramName.c_str()),
+                   Form("%s;%s;%s", paramGraphTitles[key].c_str(), paramGraphXTitles[key].c_str(), yTitle.c_str()),
+                   100, xMin, xMax);
+        frame.SetMinimum(yMin - yPad);
+        frame.SetMaximum(yMax + yPad);
+        frame.SetStats(0);
+        frame.GetXaxis()->SetTitleSize(0.052);
+        frame.GetYaxis()->SetTitleSize(0.052);
+        frame.GetXaxis()->SetLabelSize(0.044);
+        frame.GetYaxis()->SetLabelSize(0.044);
+        frame.GetYaxis()->SetTitleOffset(paramName == "a1" ? 1.45 : 1.22);
+        if (paramName == "a1") frame.GetYaxis()->SetNoExponent(false);
+        frame.Draw();
+
+        TF1* fit = nullptr;
+        if (graph->GetN() >= 2) {
+          const double yErrorFloor = paramName == "a1" ? 0.00035 : 0.006;
+          auto* fitGraph = new TGraphErrors();
+          fitGraph->SetName(Form("fitGraph_%s_%s_%s_vs_momentum", tag.c_str(), key.c_str(), paramName.c_str()));
+          for (int ip = 0; ip < graph->GetN(); ++ip) {
+            double x = 0.0;
+            double y = 0.0;
+            graph->GetPoint(ip, x, y);
+            fitGraph->SetPoint(ip, x, y);
+            fitGraph->SetPointError(ip, graph->GetErrorX(ip), std::max(graph->GetErrorY(ip), yErrorFloor));
+          }
+          fit = new TF1(Form("fit_%s_%s_%s_vs_momentum", tag.c_str(), key.c_str(), paramName.c_str()),
+                        "[0]+[1]*x", xMin, xMax);
+          const int fitStatus = fitGraph->Fit(fit, "QEX0");
+          if (fitStatus == 0) {
+            auto* fitBand = new TGraphErrors(200);
+            fitBand->SetName(Form("band_%s_%s_%s_vs_momentum", tag.c_str(), key.c_str(), paramName.c_str()));
+            for (int ip = 0; ip < 200; ++ip) {
+              const double x = xMin + (xMax - xMin) * static_cast<double>(ip) / 199.0;
+              fitBand->SetPoint(ip, x, fit->Eval(x));
+              fitBand->SetPointError(ip, 0.0, 0.0);
+            }
+            TVirtualFitter* fitter = TVirtualFitter::GetFitter();
+            if (fitter) {
+              fitter->GetConfidenceIntervals(fitBand, 0.68);
+              fitBand->SetFillColorAlpha(kRed, 0.22);
+              fitBand->SetLineColor(kRed);
+              fitBand->SetBit(TObject::kCanDelete);
+              fitBand->Draw("E3 SAME");
+            }
+            fit->SetLineColor(kRed + 1);
+            fit->SetLineWidth(3);
+            fit->SetBit(TObject::kCanDelete);
+            fit->Draw("SAME");
+          } else {
+            delete fit;
+            fit = nullptr;
+          }
+          delete fitGraph;
+        }
+
+        graph->SetMarkerStyle(20);
+        graph->SetMarkerSize(0.9);
+        graph->SetMarkerColor(kBlack);
+        graph->SetLineColor(kBlack);
+        graph->Draw("PE SAME");
+
+        cParam.SaveAs(Form("%s/%s_%s_%s_vs_momentum.png", outdir.c_str(), tag.c_str(), key.c_str(), paramName.c_str()));
+        std::ofstream fitOut(Form("%s/%s_%s_%s_vs_momentum_fit.txt", outdir.c_str(), tag.c_str(), key.c_str(), paramName.c_str()));
+        fitOut << "# Fit expression: [0]+[1]*p\n";
+        fitOut << "# Graph: " << key << " " << paramName << "\n";
+        fitOut << "# x axis: " << paramGraphXTitles[key] << "\n";
+        fitOut << std::setprecision(12);
+        if (fit) {
+          fitOut << "p0 = " << fit->GetParameter(0) << " +/- " << fit->GetParError(0) << "\n";
+          fitOut << "p1 = " << fit->GetParameter(1) << " +/- " << fit->GetParError(1) << "\n";
+          fitOut << "chi2 = " << fit->GetChisquare() << "\n";
+          fitOut << "ndf = " << fit->GetNDF() << "\n";
+        } else {
+          fitOut << "# Fit was not performed or failed.\n";
+        }
+      };
+
+      for (const auto& item : a0VsMomentumGraphs) {
+        const std::string& key = item.first;
+        drawParamGraph(item.second.get(), key, "a0", "a_{0}");
+        if (a1VsMomentumGraphs.count(key)) {
+          drawParamGraph(a1VsMomentumGraphs[key].get(), key, "a1", "a_{1} [1/deg]");
+        }
+      }
+    }
+  }
 
   // Load correction histogram from ROOT file
   void LoadCorrectionHistogram(const std::string& filename, const std::string& histoname = "h_correction") {
@@ -1399,8 +2074,8 @@ class DISANAcomparer {
         {"DeltaPhi", "Coplanarity Angle", "#Delta#phi [deg]", 0, 20},
         {"Mx2_epg", "Missing Mass Squared (ep#gamma)", "MM^{2}(ep#gamma) [GeV^{2}]", -0.05, 0.05},
         {"Mx2_eg", "Invariant Mass (e#gamma)", "M^{2}(e#gamma) [GeV^{2}]", -0.5, 3},
-        {"Theta_e_gamma", "Angle: e-#gamma", "#theta(e, #gamma) [deg]", 0.0, 60.0},
-        {"DeltaE", "Energy Balance", "#DeltaE [GeV]", -1.0, 2.0}};
+        {"Theta_e_gamma", "Angle: e-#gamma", "#theta(e, #gamma) [deg]", 0.0, 60.0}};
+        //{"DeltaE", "Energy Balance", "#DeltaE [GeV]", -1.0, 2.0}};
 
     for (const auto& [cutExpr, cutLabel] : detectorCuts) {
       std::string cleanName = cutLabel;
@@ -1442,15 +2117,15 @@ class DISANAcomparer {
 
           double mean = h_clone->GetMean();
           double sigma = h_clone->GetStdDev();
-          double x1 = mean - 3 * sigma;
-          double x2 = mean + 3 * sigma;
+          // double x1 = mean - 3 * sigma;
+          // double x2 = mean + 3 * sigma;
 
-          TLine* line1 = new TLine(x1, 0, x1, h_clone->GetMaximum() * 0.5);
-          TLine* line2 = new TLine(x2, 0, x2, h_clone->GetMaximum() * 0.5);
-          line1->SetLineColor(m + 2);
-          line2->SetLineColor(m + 2);
-          line1->SetLineStyle(2);  // Dashed
-          line2->SetLineStyle(2);
+          // TLine* line1 = new TLine(x1, 0, x1, h_clone->GetMaximum() * 0.5);
+          // TLine* line2 = new TLine(x2, 0, x2, h_clone->GetMaximum() * 0.5);
+          // line1->SetLineColor(m + 2);
+          // line2->SetLineColor(m + 2);
+          // line1->SetLineStyle(2);  // Dashed
+          // line2->SetLineStyle(2);
 
           if (first) {
             h_clone->Draw("HIST");
@@ -1461,10 +2136,10 @@ class DISANAcomparer {
 
           legend->AddEntry(h_clone, labels[m].c_str(), "l");
           std::ostringstream stats;
-          stats << "#mu = " << std::fixed << std::setprecision(2) << mean << ", #sigma = " << std::fixed << std::setprecision(2) << sigma;
+          stats << "#mu = " << std::fixed << std::setprecision(3) << mean << ", #sigma = " << std::fixed << std::setprecision(3) << sigma;
           legend->AddEntry((TObject*)0, stats.str().c_str(), "");
-          line1->Draw("SAME");
-          line2->Draw("SAME");
+          // line1->Draw("SAME");
+          // line2->Draw("SAME");
         }
 
         legend->Draw();
@@ -1565,40 +2240,42 @@ class DISANAcomparer {
 
           double mean = hD->GetMean();
           double sigma = hD->GetStdDev();
-          double x1 = mean - 3.0 * sigma;
-          double x2 = mean + 3.0 * sigma;
+          // double x1 = mean - 3.0 * sigma;
+          // double x2 = mean + 3.0 * sigma;
 
-          double meanM = hM->GetMean();
-          double sigmaM = hM->GetStdDev();
-          double x1M = meanM - 3.0 * sigmaM;
-          double x2M = meanM + 3.0 * sigmaM;
+          double meanM = hM ? hM->GetMean() : 0.0;
+          double sigmaM = hM ? hM->GetStdDev() : 0.0;
+          // double x1M = meanM - 3.0 * sigmaM;
+          // double x2M = meanM + 3.0 * sigmaM;
 
-          double ymax = std::max(hD->GetMaximum(), hM ? hM->GetMaximum() : 0.0);
-          TLine* line1 = new TLine(x1, 0.0, x1, ymax * 0.5);
-          TLine* line2 = new TLine(x2, 0.0, x2, ymax * 0.5);
-          line1->SetLineColor(m + 2);
-          line2->SetLineColor(m + 2);
-          line1->SetLineStyle(3);
-          line2->SetLineStyle(3);
-          line1->Draw("SAME");
-          line2->Draw("SAME");
+          // double ymax = std::max(hD->GetMaximum(), hM ? hM->GetMaximum() : 0.0);
+          // TLine* line1 = new TLine(x1, 0.0, x1, ymax * 0.5);
+          // TLine* line2 = new TLine(x2, 0.0, x2, ymax * 0.5);
+          // line1->SetLineColor(m + 2);
+          // line2->SetLineColor(m + 2);
+          // line1->SetLineStyle(3);
+          // line2->SetLineStyle(3);
+          // line1->Draw("SAME");
+          // line2->Draw("SAME");
 
-          TLine* line1M = new TLine(x1M, 0.0, x1M, ymax * 0.5);
-          TLine* line2M = new TLine(x2M, 0.0, x2M, ymax * 0.5);
-          line1M->SetLineColor(m + 2);
-          line2M->SetLineColor(m + 2);
-          line1M->SetLineStyle(3);
-          line2M->SetLineStyle(3);
-          line1M->Draw("SAME");
-          line2M->Draw("SAME");
+          // TLine* line1M = new TLine(x1M, 0.0, x1M, ymax * 0.5);
+          // TLine* line2M = new TLine(x2M, 0.0, x2M, ymax * 0.5);
+          // line1M->SetLineColor(m + 2);
+          // line2M->SetLineColor(m + 2);
+          // line1M->SetLineStyle(3);
+          // line2M->SetLineStyle(3);
+          // line1M->Draw("SAME");
+          // line2M->Draw("SAME");
 
           std::ostringstream stats;
           stats << "Data #mu = " << std::fixed << std::setprecision(3) << mean << ", #sigma = " << std::fixed << std::setprecision(3) << sigma;
           legend->AddEntry((TObject*)nullptr, stats.str().c_str(), "");
 
-          std::ostringstream statsM;
-          statsM << "MC #mu = " << std::fixed << std::setprecision(3) << meanM << ", #sigma = " << std::fixed << std::setprecision(3) << sigmaM;
-          legend->AddEntry((TObject*)nullptr, statsM.str().c_str(), "");
+          if (hM) {
+            std::ostringstream statsM;
+            statsM << "MC #mu = " << std::fixed << std::setprecision(3) << meanM << ", #sigma = " << std::fixed << std::setprecision(3) << sigmaM;
+            legend->AddEntry((TObject*)nullptr, statsM.str().c_str(), "");
+          }
         }
 
         legend->Draw();
@@ -1683,7 +2360,7 @@ class DISANAcomparer {
 
           legend->AddEntry(h_clone, labels[m].c_str(), "l");
           std::ostringstream stats;
-          stats << "#mu = " << std::fixed << std::setprecision(2) << mean << ", #sigma = " << std::fixed << std::setprecision(2) << sigma;
+          stats << "#mu = " << std::fixed << std::setprecision(3) << mean << ", #sigma = " << std::fixed << std::setprecision(3) << sigma;
           legend->AddEntry((TObject*)0, stats.str().c_str(), "");
           line1->Draw("SAME");
           line2->Draw("SAME");
@@ -1777,7 +2454,7 @@ class DISANAcomparer {
 
           legend->AddEntry(h_clone, labels[m].c_str(), "l");
           std::ostringstream stats;
-          stats << "#mu = " << std::fixed << std::setprecision(2) << mean << ", #sigma = " << std::fixed << std::setprecision(2) << sigma;
+          stats << "#mu = " << std::fixed << std::setprecision(3) << mean << ", #sigma = " << std::fixed << std::setprecision(3) << sigma;
           legend->AddEntry((TObject*)0, stats.str().c_str(), "");
           line1->Draw("SAME");
           line2->Draw("SAME");
@@ -1879,7 +2556,7 @@ class DISANAcomparer {
 
           legend->AddEntry(h_clone, labels[m].c_str(), "l");
           std::ostringstream stats;
-          stats << "#mu = " << std::fixed << std::setprecision(2) << mean << ", #sigma = " << std::fixed << std::setprecision(2) << sigma;
+          stats << "#mu = " << std::fixed << std::setprecision(3) << mean << ", #sigma = " << std::fixed << std::setprecision(3) << sigma;
           legend->AddEntry((TObject*)0, stats.str().c_str(), "");
           line1->Draw("SAME");
           line2->Draw("SAME");
@@ -3425,6 +4102,7 @@ class DISANAcomparer {
   DrawStyle styleBSA_;           // BSA plot style
 
   THnSparseD* correctionHist = nullptr;
+  DVCSWeightFunction dvcs_weight_function_;
 
   std::unique_ptr<ROOT::RDF::RNode> rdf;
   std::string outputDir = ".";

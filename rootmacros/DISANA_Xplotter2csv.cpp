@@ -8,7 +8,10 @@
 
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <iostream>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -87,9 +90,9 @@ ROOT::RDF::RNode NormalizePassColumns(const std::string& file,
 ROOT::RDF::RNode RejectPi0TwoPhoton(ROOT::RDF::RNode df_, float beam_energy);
 ROOT::RDF::RNode SelectPi0Event(ROOT::RDF::RNode df);
 
-ROOT::RDF::RNode ApplyFinalDVCSSelections(ROOT::RDF::RNode df, const std::string& rec_csv = "dvcs_cuts_rec.csv");;
+ROOT::RDF::RNode ApplyFinalDVCSSelections(ROOT::RDF::RNode df, const std::string& rec_csv = "dvcs_cuts_rec_corr.csv");;
 ROOT::RDF::RNode ApplyFinalDVCSRadSelections(ROOT::RDF::RNode df);
-ROOT::RDF::RNode ApplyFinalGenDVCSSelections(ROOT::RDF::RNode df, const std::string& rec_csv = "dvcs_cuts_gen.csv");
+ROOT::RDF::RNode ApplyFinalGenDVCSSelections(ROOT::RDF::RNode df, const std::string& rec_csv = "dvcs_cuts_gen_corr.csv");
 
 ROOT::RDF::RNode DefineDVPi0Pass(ROOT::RDF::RNode df);
 ROOT::RDF::RNode DefineGenDVPi0Pass(ROOT::RDF::RNode df);
@@ -97,6 +100,7 @@ ROOT::RDF::RNode ApplyFinalDVPi0Selections(ROOT::RDF::RNode df);
 ROOT::RDF::RNode ApplyFinalGenDVPi0Selections(ROOT::RDF::RNode df);
 
 ROOT::RDF::RNode InitKinematics(const std::string& filename_ = "", const std::string& treename_ = "", float beam_energy = 0);
+ROOT::RDF::RNode momentumcorr(ROOT::RDF::RNode df_, bool applyCorrection = true);
 ROOT::RDF::RNode Init2PhotonKinematics(ROOT::RDF::RNode df_, float beam_energy = 0);
 ROOT::RDF::RNode InitGenKinematics(const std::string& filename_ = "", const std::string& treename_ = "", float beam_energy = 0);
 
@@ -105,6 +109,9 @@ ROOT::RDF::RNode WriteSlimAndReload_exclusive(ROOT::RDF::RNode df_, const std::s
 
 void PlotAllRecoDistributions(ROOT::RDF::RNode df, const std::string& out = "reco_kinematics_grid.png",
                               int bins_p = 120, int bins_theta = 120, int bins_phi = 120);
+void WriteRunEventCounts(ROOT::RDF::RNode df,
+                         const std::string& out_csv,
+                         const std::string& label = "");
 
 static double MomentumFunc(float px, float py, float pz) { return std::sqrt(px * px + py * py + pz * pz); }
 static double ThetaFunc(float px, float py, float pz) { return std::acos(pz / std::sqrt(px * px + py * py + pz * pz)); }
@@ -114,6 +121,121 @@ static double PhiFunc(float px, float py) {
 }
 
 bool Inrange(double var, double min, double max) { return (var >= min && var < max); }
+
+static double MomentumCorrectionScale7p5(bool isPhoton, int det, double p, double theta) {
+  if (!std::isfinite(p) || !std::isfinite(theta) || p <= 0.0) return 1.0;
+
+  double a0_p0 = 1.0;
+  double a0_p1 = 0.0;
+  double a1_p0 = 0.0;
+  double a1_p1 = 0.0;
+  bool hasCorrection = false;
+
+  if (isPhoton && det == 0) {  // FT photon energy
+    a0_p0 = 1.01384962371;
+    a0_p1 = -0.00345633005311;
+    a1_p0 = 0.00392055912406;
+    a1_p1 = 0.000101895000551;
+    hasCorrection = true;
+  } else if (isPhoton && det == 1) {  // FD photon energy
+    a0_p0 = 1.07754923622;
+    a0_p1 = -0.00196102164162;
+    a1_p0 = 0.00448549463246;
+    a1_p1 = -0.00179558909233;
+    hasCorrection = true;
+  } else if (!isPhoton && det == 1) {  // FD proton momentum
+    a0_p0 = 1.03324429434;
+    a0_p1 = -0.0627598761543;
+    a1_p0 = 0.0019642331647;
+    a1_p1 = -0.000215812664027;
+    hasCorrection = true;
+  } else if (!isPhoton && det == 2) {  // CD proton momentum
+    a0_p0 = 0.966806323053;
+    a0_p1 = 0.0711872437488;
+    a1_p0 = 0.000536019455192;
+    a1_p1 = -0.00140324153035;
+    hasCorrection = true;
+  }
+
+  if (!hasCorrection) return 1.0;
+
+  const double thetaDeg = theta * 180.0 / M_PI;
+  const double a0 = a0_p0 + a0_p1 * p;
+  const double a1 = a1_p0 + a1_p1 * p;
+  const double scale = a0 + a1 * thetaDeg;
+  return (std::isfinite(scale) && scale > 0.0) ? scale : 1.0;
+}
+
+template <typename Method>
+ROOT::RDF::RNode redefine_DISCAT(ROOT::RDF::RNode node, const std::string& name, const Method method, float beam_energy) {
+  return node.Redefine(name,
+                       [method, beam_energy](double recel_p, double recel_theta, double recel_phi, double recpro_p, double recpro_theta, double recpro_phi,
+                                             double recpho_p, double recpho_theta, double recpho_phi) {
+                         return (DISANAMath(beam_energy, recel_p, recel_theta, recel_phi, recpro_p, recpro_theta, recpro_phi, recpho_p, recpho_theta,
+                                            recpho_phi).*method)();
+                       },
+                       {"recel_p", "recel_theta", "recel_phi", "recpro_p", "recpro_theta", "recpro_phi", "recpho_p", "recpho_theta", "recpho_phi"});
+}
+
+ROOT::RDF::RNode momentumcorr(ROOT::RDF::RNode df_, bool applyCorrection) {
+  if (!applyCorrection) return df_;
+
+  df_ = df_
+      .Define("momcorr_pho_scale",
+              [](double p, double theta, int det) {
+                return MomentumCorrectionScale7p5(true, det, p, theta);
+              },
+              {"recpho_p", "recpho_theta", "pho_det_region"})
+      .Define("momcorr_pro_scale",
+              [](double p, double theta, int det) {
+                return MomentumCorrectionScale7p5(false, det, p, theta);
+              },
+              {"recpro_p", "recpro_theta", "pro_det_region"})
+      .Redefine("pho_px",
+                [](float px, double scale) -> float { return static_cast<float>(px * scale); },
+                {"pho_px", "momcorr_pho_scale"})
+      .Redefine("pho_py",
+                [](float py, double scale) -> float { return static_cast<float>(py * scale); },
+                {"pho_py", "momcorr_pho_scale"})
+      .Redefine("pho_pz",
+                [](float pz, double scale) -> float { return static_cast<float>(pz * scale); },
+                {"pho_pz", "momcorr_pho_scale"})
+      .Redefine("recpho_p",
+                [](double p, double scale) { return p * scale; },
+                {"recpho_p", "momcorr_pho_scale"})
+      .Redefine("pro_px",
+                [](float px, double scale) -> float { return static_cast<float>(px * scale); },
+                {"pro_px", "momcorr_pro_scale"})
+      .Redefine("pro_py",
+                [](float py, double scale) -> float { return static_cast<float>(py * scale); },
+                {"pro_py", "momcorr_pro_scale"})
+      .Redefine("pro_pz",
+                [](float pz, double scale) -> float { return static_cast<float>(pz * scale); },
+                {"pro_pz", "momcorr_pro_scale"})
+      .Redefine("recpro_p",
+                [](double p, double scale) { return p * scale; },
+                {"recpro_p", "momcorr_pro_scale"});
+
+  const float beam_energy = 7.546;
+  df_ = redefine_DISCAT(df_, "Q2", &DISANAMath::GetQ2, beam_energy);
+  df_ = redefine_DISCAT(df_, "xB", &DISANAMath::GetxB, beam_energy);
+  df_ = redefine_DISCAT(df_, "t", &DISANAMath::GetT, beam_energy);
+  df_ = redefine_DISCAT(df_, "phi", &DISANAMath::GetPhi, beam_energy);
+  df_ = redefine_DISCAT(df_, "W", &DISANAMath::GetW, beam_energy);
+  df_ = redefine_DISCAT(df_, "nu", &DISANAMath::GetNu, beam_energy);
+  df_ = redefine_DISCAT(df_, "y", &DISANAMath::Gety, beam_energy);
+  df_ = redefine_DISCAT(df_, "Mx2_ep", &DISANAMath::GetMx2_ep, beam_energy);
+  df_ = redefine_DISCAT(df_, "Emiss", &DISANAMath::GetEmiss, beam_energy);
+  df_ = redefine_DISCAT(df_, "PTmiss", &DISANAMath::GetPTmiss, beam_energy);
+  df_ = redefine_DISCAT(df_, "Mx2_epg", &DISANAMath::GetMx2_epg, beam_energy);
+  df_ = redefine_DISCAT(df_, "Mx2_eg", &DISANAMath::GetMx2_egamma, beam_energy);
+  df_ = redefine_DISCAT(df_, "Theta_e_gamma", &DISANAMath::GetTheta_e_gamma, beam_energy);
+  df_ = redefine_DISCAT(df_, "DeltaE", &DISANAMath::GetDeltaE, beam_energy);
+  df_ = redefine_DISCAT(df_, "DeltaPhi", &DISANAMath::GetDeltaPhi, beam_energy);
+  df_ = redefine_DISCAT(df_, "Theta_gamma_gamma", &DISANAMath::GetTheta_gamma_gamma, beam_energy);
+
+  return df_;
+}
 
 /// styling plots
 // double double titleSize = 0.05, double labelSize = 0.04,double xTitleOffset = 1.1, double yTitleOffset = 1.6, int font = 42, int maxDigits = 5, int nDivisions = 510, double
@@ -159,15 +281,46 @@ ROOT::RDF::RNode define_DISCAT_pi0(ROOT::RDF::RNode node, const std::string& nam
                       "recpho2_p", "recpho2_theta", "recpho2_phi"});
 }
 
+void WriteRunEventCounts(ROOT::RDF::RNode df,
+                         const std::string& out_csv,
+                         const std::string& label) {
+  auto runs = df.Take<int>("RUN_config_run");
+
+  std::map<int, unsigned long long> counts_by_run;
+  unsigned long long total = 0;
+  for (const auto run : *runs) {
+    ++counts_by_run[run];
+    ++total;
+  }
+
+  std::ofstream fout(out_csv);
+  if (!fout) {
+    std::cerr << "[WriteRunEventCounts] ERROR: cannot open output file: "
+              << out_csv << std::endl;
+    return;
+  }
+
+  fout << "RUN_config_run,event_count\n";
+  for (const auto& item : counts_by_run) {
+    fout << item.first << "," << item.second << "\n";
+  }
+
+  std::cout << "[WriteRunEventCounts] ";
+  if (!label.empty()) std::cout << label << ": ";
+  std::cout << "saved " << counts_by_run.size()
+            << " runs, total events = " << total
+            << " to " << out_csv << std::endl;
+}
+
 void DISANA_Xplotter2csv() {
   bool ComputeBgk_core = false;  // Set to true if you want to compute background
   bool DoBkgCorr = true;       // Set to true if you want to apply background correction
 
   ROOT::EnableImplicitMT(40);
  
-  std::string input_path_from_analysisRun_7546_data = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/data";
+  std::string input_path_from_analysisRun_7546_data = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546BSA";
 
-  std::string input_path_from_analysisRun_7546_pi0MC = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/pi0";
+  std::string input_path_from_analysisRun_7546_pi0MC = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/pi0Plus";
 
   std::string input_path_from_analysisRun_7546_dvcsmc_gen = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/nobkgall";
   std::string input_path_from_analysisRun_7546_dvcsmc_rec = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546/nobkg"; //(no bkg merged)
@@ -195,7 +348,7 @@ void DISANA_Xplotter2csv() {
 
   float beam_energy = 7.546;
 
-  ROOT::RDF::RNode df_afterFid_7546_data_init = InitKinematics(filename_afterFid_7546_data, "dfSelected_afterFid_afterCorr", beam_energy);
+  ROOT::RDF::RNode df_afterFid_7546_data_init = momentumcorr(InitKinematics(filename_afterFid_7546_data, "dfSelected_afterFid_afterCorr", beam_energy), true);
 
   ROOT::RDF::RNode df_afterFid_7546_pi0MC_init = InitKinematics(filename_afterFid_7546_pi0MC, "dfSelected_afterFid_afterCorr", beam_energy);
 
@@ -255,6 +408,37 @@ void DISANA_Xplotter2csv() {
   comparer.SetCrossSectionStyle(csStyle);
   comparer.SetBSAStyle(bsaStyle);
 
+  comparer.SetDVCSWeightFunction([](const DVCSWeightInput& v) -> double {
+    // Configure DVCS event weights here. Available variables:
+    // v.pho_det_region, v.pro_det_region,
+    // v.recel_p, v.recel_theta, v.recel_phi,
+    // v.recpho_p, v.recpho_theta, v.recpho_phi,
+    // v.recpro_p, v.recpro_theta, v.recpro_phi.
+    //if (v.pho_det_region == 1) return 1.0; // FD, e.g. 0.7828
+    //if (v.pho_det_region == 0) return 1.0; // FT, e.g. 1.2079
+    if (v.pro_det_region == 2 ){
+      double pro_theta = v.recpro_theta*180.0/M_PI;
+      double weight2  = 174.874782895;
+      weight2 = weight2 - 13.4093933552 * pro_theta;
+      weight2 = weight2 + 0.386737126334 * pro_theta * pro_theta;
+      weight2 = weight2 - 0.00494497943272 * pro_theta * pro_theta * pro_theta;
+      weight2 = weight2 + 0.0000236221306856 * pro_theta * pro_theta * pro_theta * pro_theta;
+      //return 1/(weight2);
+      return 1;
+    }
+    if (v.pro_det_region == 1 ){
+      double pro_theta = v.recpro_theta*180.0/M_PI;
+      double weight1  =   7.62332107254;
+      weight1 = weight1 - 0.804406387543 * pro_theta;
+      weight1 = weight1 + 0.0327055624737 * pro_theta * pro_theta;
+      weight1 = weight1 - 0.000521842763762 * pro_theta * pro_theta * pro_theta;
+      weight1 = weight1 + 0.00000241692488631 * pro_theta * pro_theta * pro_theta * pro_theta;
+      //return 1/(weight1);
+      return 1;
+    }
+    return 1.0;
+  });
+
   comparer.PlotIndividual(false);
   /// bins for cross-section plots
   BinManager xBins;
@@ -270,17 +454,17 @@ void DISANA_Xplotter2csv() {
   //xBins.SetXBBins({0.15, 0.175, 0.2, 0.225, 0.25, 0.275, 0.3});
   //xBins.SetXBBins({0.15, 0.175});
 
-  xBins.SetQ2Bins({1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90, 3.50});
-  xBins.SetTBins({0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0});
-  xBins.SetXBBins({0.125, 0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430});
+  //*******xBins.SetQ2Bins({1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90, 3.50});
+  //*******xBins.SetTBins({0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0});
+  //*******xBins.SetXBBins({0.125, 0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430});
 
   //xBins.SetQ2Bins({1.0, 1.25, 1.5, 2.0});
   //xBins.SetTBins({0.2, 0.4, 0.6, 1.0});
   //xBins.SetXBBins({0.125, 0.15, 0.175, 0.2, 0.25, 0.3});
 
-  //xBins.SetQ2Bins({1.0, 1.25});
-  //xBins.SetTBins({0.2, 0.3});
-  //xBins.SetXBBins({0.125, 0.15});
+  xBins.SetQ2Bins({1.2, 1.5});
+  xBins.SetTBins({0.1, 0.27});
+  xBins.SetXBBins({0.13, 0.22});
 
   comparer.SetXBinsRanges(xBins);
 
@@ -343,6 +527,34 @@ void DISANA_Xplotter2csv() {
                                         "RUN_config_run!=5850 && "
                                         "RUN_config_run!=5855",
                                         "Cut: runs with bad beam conditions");         
+
+  // Uncomment or copy one of these lines to count events by RUN_config_run
+  // for any specific dataframe you want to inspect.
+  
+  WriteRunEventCounts(df_final_dvcsPi_rejected_7546_data,
+                       "run7p5_counts_dvcs_data.csv",
+                       "DVCS data after bad-run removal");
+  WriteRunEventCounts(df_final_dvcsPi_rejected_7546_dvcsmc_bkg,
+                       "run7p5_counts_dvcs_bkg.csv",
+                        "DVCS background MC");
+  WriteRunEventCounts(df_final_dvcsPi_rejected_7546_dvcsmc_nobkg,
+                       "run7p5_counts_dvcs_nobkg.csv",
+                        "DVCS no-background MC");
+  
+  /*comparer.AddModelwithPi0Corr(//df_final_dvcsPi_rejected_7546_data,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_rec,
+                              df_final_OnlPi0_7546_data,
+                              df_final_dvcsPi_rejected_7546_pi0MC,
+                              df_final_OnlPi0_7546_pi0MC,
+                              df_afterFid_7546_dvcsmc_gen,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_rec,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_bkg,
+                              df_final_dvcsPi_rejected_7546_dvcsmc_nobkg,
+                              df_afterFid_7546_dvcsmc_km15_rad,
+                              df_afterFid_7546_dvcsmc_km15_norad,
+                              df_afterFid_7546_dvcsmc_km15_norad,
+                              "RGK 7.5 GeV MC", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9837);*/
+
   comparer.AddModelwithPi0Corr(df_final_dvcsPi_rejected_7546_data,
                               //df_afterFid_7546_dvcsmc_gen,
                               df_final_OnlPi0_7546_data,
@@ -355,21 +567,7 @@ void DISANA_Xplotter2csv() {
                               df_afterFid_7546_dvcsmc_rad,
                               df_afterFid_7546_dvcsmc_norad,
                               df_afterFid_7546_dvcsmc_p1cut,
-                              "VGG", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9069/0.9647);
-
-  comparer.AddModelwithPi0Corr(df_final_dvcsPi_rejected_7546_data,
-                              //df_afterFid_7546_dvcsmc_gen,
-                              df_final_OnlPi0_7546_data,
-                              df_final_dvcsPi_rejected_7546_pi0MC,
-                              df_final_OnlPi0_7546_pi0MC,
-                              df_afterFid_7546_dvcsmc_gen,
-                              df_final_dvcsPi_rejected_7546_dvcsmc_rec,
-                              df_final_dvcsPi_rejected_7546_dvcsmc_bkg,
-                              df_final_dvcsPi_rejected_7546_dvcsmc_nobkg,
-                              df_afterFid_7546_dvcsmc_km15_rad,
-                              df_afterFid_7546_dvcsmc_km15_norad,
-                              df_afterFid_7546_dvcsmc_km15_norad,
-                              "KM15", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9069/0.9647);
+                              "RGK 7.5GeV", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9837/*0.9069/0.9647*/);
 
   //comparer.PlotKinematicComparison();
   //comparer.PlotPi0KinematicComparison();
@@ -383,9 +581,9 @@ void DISANA_Xplotter2csv() {
   //comparer.PlotDISCrossSectionComparison(luminosity);  // argument is Luminosity, polarisation
   //comparer.PlotDIS_BSA_Comparison(luminosity, polarisation);         // argument is Luminosity
   //comparer.PlotDIS_Pi0CorrComparison();
-  //comparer.PlotPi0ExclusivityComparisonByDetectorCases(detCutsPi0);
+  //comparer.PlotMomentumCorrection();
   //comparer.PlotExclusivityComparisonByDetectorCases(detCuts);
-
+  //comparer.PlotPi0ExclusivityComparisonByDetectorCases(detCutsPi0);
   gApplication->Terminate(0);
 }
 
@@ -836,6 +1034,7 @@ static inline ROOT::RDF::RNode ApplyFinalDVCSSelections_TDep(ROOT::RDF::RNode df
                                                             std::shared_ptr<CutTableTDep> cuts) {
   auto d0 = df
     // base kinematics
+    //.Filter([](double p_out_theta, int pro_det) { return (pro_det == 1 && p_out_theta < 40.00 * M_PI/180) || (p_out_theta > 46.50 * M_PI/180 && p_out_theta < 64.23 * M_PI/180); }, {"recpro_theta", "pro_det_region"})
     .Filter("Q2 > 1.0",  "Cut: Q2 > 1 GeV^2")
     .Filter("t < 1.0",   "Cut: t < 1 GeV^2")     // 你也可以删掉它，完全依赖 tEdges
     .Filter("W > 2.0",   "Cut: W > 2.0 GeV")
@@ -900,13 +1099,13 @@ static inline ROOT::RDF::RNode ApplyFinalDVCSSelections_TDep(ROOT::RDF::RNode df
 // public APIs: REC/GEN
 // ------------------------
 ROOT::RDF::RNode ApplyFinalDVCSSelections(ROOT::RDF::RNode df,
-                                         const std::string& rec_csv = "dvcs_cuts_rec_bin.csv") {
+                                         const std::string& rec_csv = "dvcs_cuts_rec_corr.csv") {
   auto cuts = std::make_shared<CutTableTDep>(LoadCutsTDepCSV(rec_csv));
   return ApplyFinalDVCSSelections_TDep(df, cuts);
 }
 
 ROOT::RDF::RNode ApplyFinalGenDVCSSelections(ROOT::RDF::RNode df,
-                                            const std::string& gen_csv = "dvcs_cuts_gen_bin.csv") {
+                                            const std::string& gen_csv = "dvcs_cuts_gen_corr.csv") {
   auto cuts = std::make_shared<CutTableTDep>(LoadCutsTDepCSV(gen_csv));
   return ApplyFinalDVCSSelections_TDep(df, cuts);
 }
@@ -932,64 +1131,70 @@ ROOT::RDF::RNode DefineDVPi0Pass(ROOT::RDF::RNode df){
             pass = Inrange(emiss_pi0, -0.4, 0.4);
             pass = pass && Inrange(mx2_epi0, 0.5, 2.0);
             pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
+            //uncorr ver.
+            //pass = pass && Inrange(mx2_eppi0, -0.014, 0.010);
+            //pass = pass && Inrange(mx2_ep_pi0, -0.185, 0.299);
+            //pass = pass && Inrange(mx2_epi0, 0.522, 1.434);
+            //pass = pass && Inrange(emiss_pi0, -0.219, 0.321);
+            //pass = pass && Inrange(deltaphi_pi0, 0.0, 3.969);
+            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.091);
+            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.472);
+            //pass = pass && Inrange(mass_pi0, 0.09, 0.178);
+            //corr ver.
             pass = pass && Inrange(mx2_eppi0, -0.014, 0.010);
-            pass = pass && Inrange(mx2_ep_pi0, -0.185, 0.299);
-            pass = pass && Inrange(mx2_epi0, 0.522, 1.434);
-            pass = pass && Inrange(emiss_pi0, -0.219, 0.321);
-            pass = pass && Inrange(deltaphi_pi0, 0.0, 3.969);
-            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.091);
-            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.472);
-            pass = pass && Inrange(mass_pi0, 0.09, 0.178);
-            //pass = Inrange(mass_pi0, 0.12, 0.15);
-            //pass = pass && Inrange(emiss_pi0, -0.5, 0.3);
-            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.15);
-            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.5);
-            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.0);
-            //pass = pass && Inrange(mx2_eppi0, -0.03, 0.03);
-            //pass = pass && Inrange(mx2_ep_pi0, -0.2, 0.3);
-            //pass = pass && Inrange(mx2_epi0, 0.0, 1.5);
+            pass = pass && Inrange(mx2_ep_pi0, -0.177, 0.323);
+            pass = pass && Inrange(mx2_epi0, 0.459, 1.367);
+            pass = pass && Inrange(emiss_pi0, -0.251, 0.285);
+            pass = pass && Inrange(deltaphi_pi0, 0.0, 4.094);
+            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.088);
+            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.288);
+            pass = pass && Inrange(mass_pi0, 0.091, 0.179);
           } else if (pho_det_region == 1 && pho2_det_region == 1 && pro_det_region ==1) {
             pass = Inrange(Theta_epho1, 20.0, 999.0);
             pass = pass && Inrange(Theta_epho2, 10.0, 999.0);
             pass = pass && Inrange(Theta_pho1pho2, 2.0, 999.0);
             pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            pass = pass && Inrange(mx2_eppi0, -0.019, 0.017);
-            pass = pass && Inrange(mx2_ep_pi0, -0.203, 0.401);
-            pass = pass && Inrange(mx2_epi0, 0.458, 1.598);
-            pass = pass && Inrange(emiss_pi0, -0.3, 0.544);
-            pass = pass && Inrange(deltaphi_pi0, 0.0, 8.796);
-            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.149);
-            pass = pass && Inrange(theta_pi0pi0, 0.0, 2.107);
-            pass = pass && Inrange(mass_pi0, 0.113, 0.153);
-            //pass = Inrange(mass_pi0, 0.1, 0.16);
-            //pass = pass && Inrange(emiss_pi0, -0.4, 0.4);
-            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.5);
-            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.0);
-            //pass = pass && Inrange(mx2_eppi0, -0.02, 0.02);
-            //pass = pass && Inrange(mx2_ep_pi0, -0.2, 0.2);
-            //pass = pass && Inrange(mx2_epi0, 0.5, 1.5);
+            //uncorr ver.
+            //pass = pass && Inrange(mx2_eppi0, -0.019, 0.017);
+            //pass = pass && Inrange(mx2_ep_pi0, -0.203, 0.401);
+            //pass = pass && Inrange(mx2_epi0, 0.458, 1.598);
+            //pass = pass && Inrange(emiss_pi0, -0.3, 0.544);
+            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.796);
+            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.149);
+            //pass = pass && Inrange(theta_pi0pi0, 0.0, 2.107);
+            //pass = pass && Inrange(mass_pi0, 0.113, 0.153);
+            //corr ver.
+            pass = pass && Inrange(mx2_eppi0, -0.021, 0.015);
+            pass = pass && Inrange(mx2_ep_pi0, -0.227, 0.449);
+            pass = pass && Inrange(mx2_epi0, 0.181, 1.385);
+            pass = pass && Inrange(emiss_pi0, -0.516, 0.392);
+            pass = pass && Inrange(deltaphi_pi0, 0.0, 9.051);
+            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.165);
+            pass = pass && Inrange(theta_pi0pi0, 0.0, 2.132);
+            pass = pass && Inrange(mass_pi0, 0.116, 0.160);
           } else if (pho_det_region == 1 && pho2_det_region == 1 && pro_det_region ==2) {
             pass = Inrange(Theta_epho1, 10.0, 999.0);
             pass = pass && Inrange(Theta_epho2, 10.0, 999.0);
             pass = pass && Inrange(Theta_pho1pho2, 3.0, 999.0);
             pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            pass = pass && Inrange(mx2_eppi0, -0.017, 0.015);
-            pass = pass && Inrange(mx2_ep_pi0, -0.165, 0.351);
-            pass = pass && Inrange(mx2_epi0, 0.324, 1.696);
-            pass = pass && Inrange(emiss_pi0, -0.383, 0.565);
-            pass = pass && Inrange(deltaphi_pi0, 0.0, 8.065);
-            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.120);
-            pass = pass && Inrange(theta_pi0pi0, 0.0, 2.051);
-            pass = pass && Inrange(mass_pi0, 0.114, 0.154);
-            //pass = Inrange(mass_pi0, 0.11, 0.15);
-            //pass = pass && Inrange(emiss_pi0, -0.4, 0.4);
-            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.5);
-            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.0);
-            //pass = pass && Inrange(mx2_eppi0, -0.02, 0.02);
-            //pass = pass && Inrange(mx2_ep_pi0, -0.2, 0.2);
-            //pass = pass && Inrange(mx2_epi0, 0.5, 1.5);
+            //uncorr ver.
+            //pass = pass && Inrange(mx2_eppi0, -0.017, 0.015);
+            //pass = pass && Inrange(mx2_ep_pi0, -0.165, 0.351);
+            //pass = pass && Inrange(mx2_epi0, 0.324, 1.696);
+            //pass = pass && Inrange(emiss_pi0, -0.383, 0.565);
+            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.065);
+            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.120);
+            //pass = pass && Inrange(theta_pi0pi0, 0.0, 2.051);
+            //pass = pass && Inrange(mass_pi0, 0.114, 0.154);
+            //corr ver.
+            pass = pass && Inrange(mx2_eppi0, -0.019, 0.013);
+            pass = pass && Inrange(mx2_ep_pi0, -0.187, 0.393);
+            pass = pass && Inrange(mx2_epi0, -0.012, 1.464);
+            pass = pass && Inrange(emiss_pi0, -0.598, 0.406);
+            pass = pass && Inrange(deltaphi_pi0, 0.0, 7.925);
+            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.142);
+            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.745);
+            pass = pass && Inrange(mass_pi0, 0.117, 0.161);
           }
         }
         return pass;
@@ -1009,64 +1214,70 @@ ROOT::RDF::RNode DefineGenDVPi0Pass(ROOT::RDF::RNode df){
             pass = Inrange(emiss_pi0, -0.4, 0.4);
             pass = pass && Inrange(mx2_epi0, 0.5, 2.0);
             pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
+            //uncorr ver.
+            //pass = pass && Inrange(mx2_eppi0, -0.007, 0.005);
+            //pass = pass && Inrange(mx2_ep_pi0, -0.126, 0.174);
+            //pass = pass && Inrange(mx2_epi0, 0.578, 1.214);
+            //pass = pass && Inrange(emiss_pi0, -0.180, 0.192);
+            //pass = pass && Inrange(deltaphi_pi0, 0.0, 1.590);
+            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.044);
+            //pass = pass && Inrange(theta_pi0pi0, 0.0, 0.689);
+            //pass = pass && Inrange(mass_pi0, 0.130, 0.142);
+            //corr ver.
             pass = pass && Inrange(mx2_eppi0, -0.007, 0.005);
-            pass = pass && Inrange(mx2_ep_pi0, -0.126, 0.174);
-            pass = pass && Inrange(mx2_epi0, 0.578, 1.214);
-            pass = pass && Inrange(emiss_pi0, -0.180, 0.192);
-            pass = pass && Inrange(deltaphi_pi0, 0.0, 1.590);
-            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.044);
-            pass = pass && Inrange(theta_pi0pi0, 0.0, 0.689);
-            pass = pass && Inrange(mass_pi0, 0.130, 0.142);
-            //pass = Inrange(mass_pi0, 0.12, 0.15);
-            //pass = pass && Inrange(emiss_pi0, -0.5, 0.3);
-            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.15);
-            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.5);
-            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.0);
-            //pass = pass && Inrange(mx2_eppi0, -0.03, 0.03);
-            //pass = pass && Inrange(mx2_ep_pi0, -0.2, 0.3);
-            //pass = pass && Inrange(mx2_epi0, 0.0, 1.5);
+            pass = pass && Inrange(mx2_ep_pi0, -0.134, 0.194);
+            pass = pass && Inrange(mx2_epi0, 0.585, 1.205);
+            pass = pass && Inrange(emiss_pi0, -0.172, 0.188);
+            pass = pass && Inrange(deltaphi_pi0, 0.0, 2.137);
+            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.047);
+            pass = pass && Inrange(theta_pi0pi0, 0.0, 0.63);
+            pass = pass && Inrange(mass_pi0, 0.128, 0.144);
           } else if (pho_det_region == 1 && pho2_det_region == 1 && pro_det_region ==1) {
             pass = Inrange(Theta_epho1, 20.0, 999.0);
             pass = pass && Inrange(Theta_epho2, 10.0, 999.0);
             pass = pass && Inrange(Theta_pho1pho2, 2.0, 999.0);
             pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            pass = pass && Inrange(mx2_eppi0, -0.016, 0.012);
-            pass = pass && Inrange(mx2_ep_pi0, -0.190, 0.306);
-            pass = pass && Inrange(mx2_epi0, 0.369, 1.417);
-            pass = pass && Inrange(emiss_pi0, -0.365, 0.399);
-            pass = pass && Inrange(deltaphi_pi0, 0.0, 6.577);
-            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.129);
-            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.538);
-            pass = pass && Inrange(mass_pi0, 0.117, 0.153);
-            //pass = Inrange(mass_pi0, 0.1, 0.16);
-            //pass = pass && Inrange(emiss_pi0, -0.4, 0.4);
-            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.5);
-            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.0);
-            //pass = pass && Inrange(mx2_eppi0, -0.02, 0.02);
-            //pass = pass && Inrange(mx2_ep_pi0, -0.2, 0.2);
-            //pass = pass && Inrange(mx2_epi0, 0.5, 1.5);
+            //uncorr ver.
+            //pass = pass && Inrange(mx2_eppi0, -0.016, 0.012);
+            //pass = pass && Inrange(mx2_ep_pi0, -0.190, 0.306);
+            //pass = pass && Inrange(mx2_epi0, 0.369, 1.417);
+            //pass = pass && Inrange(emiss_pi0, -0.365, 0.399);
+            //pass = pass && Inrange(deltaphi_pi0, 0.0, 6.577);
+            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.129);
+            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.538);
+            //pass = pass && Inrange(mass_pi0, 0.117, 0.153);
+            //corr ver.
+            pass = pass && Inrange(mx2_eppi0, -0.018, 0.014);
+            pass = pass && Inrange(mx2_ep_pi0, -0.229, 0.347);
+            pass = pass && Inrange(mx2_epi0, 0.340, 1.372);
+            pass = pass && Inrange(emiss_pi0, -0.412, 0.392);
+            pass = pass && Inrange(deltaphi_pi0, 0.0, 7.743);
+            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.130);
+            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.438);
+            pass = pass && Inrange(mass_pi0, 0.116, 0.156);
           } else if (pho_det_region == 1 && pho2_det_region == 1 && pro_det_region ==2) {
             pass = Inrange(Theta_epho1, 10.0, 999.0);
             pass = pass && Inrange(Theta_epho2, 10.0, 999.0);
             pass = pass && Inrange(Theta_pho1pho2, 3.0, 999.0);
             pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
+            //uncorr ver.
+            //pass = pass && Inrange(mx2_eppi0, -0.011, 0.009);
+            //pass = pass && Inrange(mx2_ep_pi0, -0.131, 0.209);
+            //pass = pass && Inrange(mx2_epi0, 0.315, 1.515);
+            //pass = pass && Inrange(emiss_pi0, -0.374, 0.422);
+            //pass = pass && Inrange(deltaphi_pi0, 0.0, 5.012);
+            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.093);
+            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.241);
+            //pass = pass && Inrange(mass_pi0, 0.117, 0.153);
+            //corr ver.
             pass = pass && Inrange(mx2_eppi0, -0.011, 0.009);
-            pass = pass && Inrange(mx2_ep_pi0, -0.131, 0.209);
-            pass = pass && Inrange(mx2_epi0, 0.315, 1.515);
-            pass = pass && Inrange(emiss_pi0, -0.374, 0.422);
-            pass = pass && Inrange(deltaphi_pi0, 0.0, 5.012);
-            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.093);
-            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.241);
-            pass = pass && Inrange(mass_pi0, 0.117, 0.153);
-            //pass = Inrange(mass_pi0, 0.11, 0.15);
-            //pass = pass && Inrange(emiss_pi0, -0.4, 0.4);
-            //pass = pass && Inrange(ptmiss_pi0, 0.0, 0.2);
-            //pass = pass && Inrange(theta_pi0pi0, 0.0, 1.5);
-            //pass = pass && Inrange(deltaphi_pi0, 0.0, 8.0);
-            //pass = pass && Inrange(mx2_eppi0, -0.02, 0.02);
-            //pass = pass && Inrange(mx2_ep_pi0, -0.2, 0.2);
-            //pass = pass && Inrange(mx2_epi0, 0.5, 1.5);
+            pass = pass && Inrange(mx2_ep_pi0, -0.149, 231);
+            pass = pass && Inrange(mx2_epi0, 0.228, 1.532);
+            pass = pass && Inrange(emiss_pi0, -0.427, 0.433);
+            pass = pass && Inrange(deltaphi_pi0, 0.0, 5.471);
+            pass = pass && Inrange(ptmiss_pi0, 0.0, 0.097);
+            pass = pass && Inrange(theta_pi0pi0, 0.0, 1.128);
+            pass = pass && Inrange(mass_pi0, 0.116, 0.156);
           }
         }
         return pass;
@@ -1075,27 +1286,29 @@ ROOT::RDF::RNode DefineGenDVPi0Pass(ROOT::RDF::RNode df){
 }
 
 ROOT::RDF::RNode ApplyFinalDVPi0Selections(ROOT::RDF::RNode df) {
-  //df = df.Filter("Q2 > 1.0", "Cut: Q2 > 1 GeV^2")
-  //    .Filter("t < 1.0", "Cut: t < 1 GeV^2")
+  df = df.Filter("Q2 > 1.0", "Cut: Q2 > 1 GeV^2")
+         .Filter("t < 1.0", "Cut: t < 1 GeV^2")
       //.Filter("recel_p > 6.0", "Cut: recel_p > 0.6")
 
       // 5. W > 2
-  //    .Filter("W > 2.0", "Cut: W > 1.8 GeV");
+         .Filter("W > 2.0", "Cut: W > 1.8 GeV");
       //.Filter("phi > 100.0 && phi < 300 ", "Cut: phi")
   df = DefineDVPi0Pass(df);
-  return df.Filter("DVPi0_pass", "Cut: DVPi0 event selection");
+  return df//.Filter([](double p_out_theta, int pro_det) { return (pro_det == 1 && p_out_theta < 40.00 * M_PI/180) || (p_out_theta > 46.50 * M_PI/180 && p_out_theta < 64.23 * M_PI/180); }, {"recpro_theta", "pro_det_region"})
+           .Filter("DVPi0_pass", "Cut: DVPi0 event selection");
 }
 
 ROOT::RDF::RNode ApplyFinalGenDVPi0Selections(ROOT::RDF::RNode df) {
-  //df = df.Filter("Q2 > 1.0", "Cut: Q2 > 1 GeV^2")
-  //    .Filter("t < 1.0", "Cut: t < 1 GeV^2")
+  df = df.Filter("Q2 > 1.0", "Cut: Q2 > 1 GeV^2")
+         .Filter("t < 1.0", "Cut: t < 1 GeV^2")
       //.Filter("recel_p > 6.0", "Cut: recel_p > 0.6")
 
       // 5. W > 2
-  //    .Filter("W > 2.0", "Cut: W > 1.8 GeV");
+         .Filter("W > 2.0", "Cut: W > 1.8 GeV");
       //.Filter("phi > 100.0 && phi < 300 ", "Cut: phi")
   df = DefineGenDVPi0Pass(df);
-  return df.Filter("DVPi0_pass", "Cut: DVPi0 event selection");
+  return df//.Filter([](double p_out_theta, int pro_det) { return (pro_det == 1 && p_out_theta < 40.00 * M_PI/180) || (p_out_theta > 46.50 * M_PI/180 && p_out_theta < 64.23 * M_PI/180); }, {"recpro_theta", "pro_det_region"})
+           .Filter("DVPi0_pass", "Cut: DVPi0 event selection");
 }
 
 
@@ -1265,8 +1478,8 @@ ROOT::RDF::RNode WriteSlimAndReload_exclusive(ROOT::RDF::RNode df, const std::st
     "REC_Photon_MaxE_std",
     "REC_Event_helicity",
     "RUN_config_run",
-    "REC_Track_pindex",
-    "REC_Track_sector",
+    //"REC_Track_pindex",
+    //"REC_Track_sector",
 
     // ===== Picked particles =====
     "ele_px","ele_py","ele_pz",

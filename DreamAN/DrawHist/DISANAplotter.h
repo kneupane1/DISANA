@@ -114,6 +114,7 @@ class DISANAplotter {
     phi_alu_zphi_QW_.clear();
   }
   void SetLuminosity(double L) { luminosity_nb_inv = L; }
+  double GetBeamEnergy() const { return beam_energy; }
   ROOT::RDF::RNode GetRDF() { return rdf; }
   ROOT::RDF::RNode GetRDF_Pi0Data() { return rdf_pi0_data.value(); }
   ROOT::RDF::RNode GetRDF_DVCSPi0MC() { return rdf_pi0_pi0mc.value(); }
@@ -339,6 +340,8 @@ class DISANAplotter {
     return allDIShisto;
   }
 
+  void SetDVCSWeightFunction(DVCSWeightFunction weightFunc) { dvcs_weight_function_ = std::move(weightFunc); }
+
   std::vector<TH1*> GetAllHistograms() {
     std::vector<TH1*> all;
     for (auto& h : kinematicHistos) all.push_back(h.GetPtr());
@@ -347,7 +350,7 @@ class DISANAplotter {
   }
 
   std::vector<std::vector<std::vector<TH1D*>>> ComputeDVCS_CrossSection(const BinManager& bins) {
-    auto result = kinCalc.ComputeDVCS_CrossSection_Weighted(rdf, bins, luminosity_nb_inv);
+    auto result = kinCalc.ComputeDVCS_CrossSection_Weighted(rdf, bins, luminosity_nb_inv, dvcs_weight_function_);
     if (dopi0corr) {
       auto sigma_pi0_3d = kinCalc.ComputeDVCS_CrossSection(*rdf_pi0_data, bins, luminosity_nb_inv);
       result = UsePi0Correction(result, sigma_pi0_3d, ComputePi0Corr(bins));
@@ -378,7 +381,7 @@ class DISANAplotter {
     auto lumi_pol = luminosity_nb_inv * n_pol / n_all;
     std::cout << " Pol " << pol << " fraction: " << double(n_pol) / n_all << ", effective luminosity: " << lumi_pol << " nb^-1\n";
     
-    auto result = kinCalc.ComputeDVCS_CrossSection_Weighted(rdf_pol, bins, lumi_pol);
+    auto result = kinCalc.ComputeDVCS_CrossSection_Weighted(rdf_pol, bins, lumi_pol, dvcs_weight_function_);
     if (dopi0corr) {
       auto sigma_pi0_3d = kinCalc.ComputeDVCS_CrossSection(*rdf_pi0_data, bins, luminosity_nb_inv);
       result = UsePi0Correction(result, sigma_pi0_3d, ComputePi0Corr(bins));
@@ -2860,6 +2863,7 @@ class DISANAplotter {
   double I_avg = 60.0;  // average beam current in nA, for luminosity calculation if needed
   double I_mc = 60.0;   // beam current corresponding to the luminosity of the MC sample, in nA
   double eff_corr = 1.0;   // overall efficiency correction factor to apply to MC yields (e.g. to match a known cross section)
+  DVCSWeightFunction dvcs_weight_function_;
   std::vector<std::vector<std::vector<double>>> phi_mean_xB_QW_;
   std::vector<std::vector<std::vector<double>>> phi_mean_W_QW_;
   std::vector<std::vector<std::vector<double>>> phi_mean_GammaV_QW_;

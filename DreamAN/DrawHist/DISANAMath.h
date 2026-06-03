@@ -16,6 +16,7 @@
 #include <ROOT/RDataFrame.hxx>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -70,6 +71,22 @@ struct EqualStatBinningResult {
   std::vector<double> q2Edges;      // x-axis (Q^2)
   std::vector<double> tprimeEdges;  // y-axis (t')
 };
+
+struct DVCSWeightInput {
+  int pho_det_region = -1;
+  int pro_det_region = -1;
+  double recel_p = 0.0;
+  double recel_theta = 0.0;
+  double recel_phi = 0.0;
+  double recpho_p = 0.0;
+  double recpho_theta = 0.0;
+  double recpho_phi = 0.0;
+  double recpro_p = 0.0;
+  double recpro_theta = 0.0;
+  double recpro_phi = 0.0;
+};
+
+using DVCSWeightFunction = std::function<double(const DVCSWeightInput&)>;
 
 // -----------------------------------------------------------------------------
 // (p,theta,phi) helpers
@@ -848,7 +865,8 @@ class DISANAMath {
     return hist;
   }
 
-    std::vector<std::vector<std::vector<TH1D *>>> ComputeDVCS_CrossSection_Weighted(ROOT::RDF::RNode df, const BinManager &bins, double luminosity)
+    std::vector<std::vector<std::vector<TH1D *>>> ComputeDVCS_CrossSection_Weighted(ROOT::RDF::RNode df, const BinManager &bins, double luminosity,
+                                                                                   DVCSWeightFunction weightFunc = nullptr)
   {
     TStopwatch timer;
     timer.Start();
@@ -922,24 +940,23 @@ class DISANAMath {
           }
     }
 
-    auto weightFromPhoRegion = [](int pho_det_region) -> double {
-      if (pho_det_region == 1) return 1; //0.7828; // FD
-      if (pho_det_region == 0) return 1; //1.2079; // FT
-      return 1.0;
-    };
-
-    auto fillSlot = [&](unsigned int slot, double Q2, double t, double xB, double phi, int pho_det_region) {
+    auto fillSlot = [&](unsigned int slot, double Q2, double t, double xB, double phi, int pho_det_region, int pro_det_region,
+                        double recel_p, double recel_theta, double recel_phi, double recpho_p, double recpho_theta, double recpho_phi,
+                        double recpro_p, double recpro_theta, double recpro_phi) {
       const int iq = findBin(Q2, q2_bins);
       const int it = findBin(t,  t_bins);
       const int ix = findBin(xB, xb_bins);
       if (iq < 0 || it < 0 || ix < 0) return;
 
-      const double w = weightFromPhoRegion(pho_det_region);
+      const DVCSWeightInput weightInput{pho_det_region, pro_det_region, recel_p, recel_theta, recel_phi,
+                                        recpho_p, recpho_theta, recpho_phi, recpro_p, recpro_theta, recpro_phi};
+      const double w = weightFunc ? weightFunc(weightInput) : 1.0;
       hslot[slot][ix][iq][it]->Fill(phi, w);
     };
 
-    // NOTE: add "pho_det_region" as input column
-    df.ForeachSlot(fillSlot, {"Q2", "t", "xB", "phi", "pho_det_region"});
+    df.ForeachSlot(fillSlot, {"Q2", "t", "xB", "phi", "pho_det_region", "pro_det_region",
+                              "recel_p", "recel_theta", "recel_phi", "recpho_p", "recpho_theta", "recpho_phi",
+                              "recpro_p", "recpro_theta", "recpro_phi"});
 
     // merge slot hists into final
     for (unsigned int s = 0; s < nSlots; ++s) {
@@ -969,7 +986,7 @@ class DISANAMath {
           h->Scale(scale); // scales both content and errors
         }
 
-    std::cout << "DVCS cross-sections computed (weighted by pho_det_region) in a single pass.\n";
+    std::cout << "DVCS cross-sections computed " << (weightFunc ? "(with custom event weights)" : "(unweighted)") << " in a single pass.\n";
     timer.Stop();
     std::cout << "Time elapsed: " << timer.RealTime() << " s (real), " << timer.CpuTime() << " s (CPU)\n";
     return hist;

@@ -18,10 +18,11 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   } else {
     std::cout << "[RunDVCSAnalysis] IMT disabled (single thread mode).\n";
   }
-  bool IsMC = true;              // Set to true if you want to run on MC data
+  bool IsMC = false;              // Set to true if you want to run on MC data
   bool IsreprocRootFile = false;  // Set to true if you want to reprocess ROOT files
   bool IsInbending = true;        // Set to true if you want to run on inbending data
   bool IsMinimalBook = true;
+  bool OutputWCSV = false;        // Set to true to write final corrected W/electron CSV only, with no ROOT output
   //std::string dataconfig = "rgasp18_inb";
   //std::string dataconfig = "rgasp18_outb";
   std::string dataconfig = "rgkfa18_7546";
@@ -414,18 +415,93 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   //eventCuts->AddParticleMotherCut("pi0", pi0);      // Applies defaults automatically
 
   auto corr = std::make_shared<MomentumCorrection>();
+  auto addElectronWCorrection = [&](const double a0[7][3], const double a1[7][3],
+                                  const char* tag) {
+    std::cout << "Applying electron W correction: " << tag << std::endl;
+
+    corr->AddPiecewiseCorrection(
+        11,
+        {0.0, 10.0,
+         0.0 * M_PI / 180.0, 25.0 * M_PI / 180.0,
+         -180.0 * M_PI / 180.0, 360.0 * M_PI / 180.0,
+         MomentumCorrection::FD},
+        [=](double p, double theta, double phi) {
+          const double thetaDeg = theta * 180.0 / M_PI;
+
+          double phiDeg = phi * 180.0 / M_PI;
+          while (phiDeg < 0.0) phiDeg += 360.0;
+          while (phiDeg >= 360.0) phiDeg -= 360.0;
+
+          int sector = 0;
+          if (phiDeg >= 335.0 || phiDeg < 35.0) sector = 1;
+          else if (phiDeg >= 35.0 && phiDeg < 95.0) sector = 2;
+          else if (phiDeg >= 95.0 && phiDeg < 155.0) sector = 3;
+          else if (phiDeg >= 155.0 && phiDeg < 215.0) sector = 4;
+          else if (phiDeg >= 215.0 && phiDeg < 275.0) sector = 5;
+          else if (phiDeg >= 275.0 && phiDeg < 335.0) sector = 6;
+          else return p;
+
+          const double sectorStart = std::fmod(335.0 + 60.0 * (sector - 1), 360.0);
+          double phiOffset = phiDeg - sectorStart;
+          if (phiOffset < 0.0) phiOffset += 360.0;
+          const double phiAxisDeg = (sectorStart > 180.0 ? sectorStart - 360.0 : sectorStart) + phiOffset;
+
+          const double a0Theta = a0[sector][0] + a0[sector][1] * thetaDeg + a0[sector][2] * thetaDeg * thetaDeg;
+          const double a1Theta = a1[sector][0] + a1[sector][1] * thetaDeg + a1[sector][2] * thetaDeg * thetaDeg;
+
+          const double deltaP = a0Theta + a1Theta * phiAxisDeg;
+          return p + deltaP;
+        });
+  };
+  if (dataconfig == "rgkfa18_6535") {
+    static const double a0_6535[7][3] = {
+        {0, 0, 0},
+        {-0.0607703608299, 0.00947409009913, -0.00027910350385},
+        {-0.148989038706, 0.019138245863, -0.000316141321828},
+        {-0.349771440566, 0.060140859265, -0.00221405060863},
+        {-0.14284588876, 0.0262234182811, -0.000962130915836},
+        {0.158532230102, -0.0293363612172, 0.00071279153021},
+        {0.0420628271525, -0.00371369188712, -1.3492508012e-06},
+    };
+    static const double a1_6535[7][3] = {
+        {0, 0, 0},
+        {0.000340387915346, -2.97480311866e-05, -3.01810635576e-06},
+        {0.0013359495078, -0.000151984757972, -5.84338050475e-07},
+        {0.00237725257551, -0.000426787959329, 1.58320489738e-05},
+        {0.000594671860573, -0.000112408996677, 4.22003597994e-06},
+        {0.00182795282796, -0.000316719845107, 8.54424708941e-06},
+        {0.00205466199357, -0.000293059733577, 7.95533369053e-06},
+    };
+    std::cout<<"Applying rgkfa18_6535 electron momentum correction"<<std::endl;
+    addElectronWCorrection(a0_6535, a1_6535, "RGK Fa18 6.535 GeV");
+  }
+
+  if (dataconfig == "rgkfa18_7546") {
+    static const double a0_7546[7][3] = {
+        {0, 0, 0},
+        {-0.0558480918304, 0.00947563717397, -0.00026752320451},
+        {-0.126845087674, 0.0125657867249, 0.000109553193745},
+        {-0.430165302006, 0.076075743467, -0.00286326906215},
+        {-0.185268899714, 0.033516091936, -0.00120591797152},
+        {0.191603830691, -0.032241638747, 0.000660027162024},
+        {0.0706479012429, -0.00711662343967, 0.000119120231706},
+    };
+    static const double a1_7546[7][3] = {
+        {0, 0, 0},
+        {-0.000149496822994, 5.9227386731e-05, -7.04361311027e-06},
+        {0.000679503953073, 2.50467375836e-05, -1.04638168849e-05},
+        {0.00295428957863, -0.000540120802189, 2.05025473627e-05},
+        {0.000832140318848, -0.00014970808868, 5.46207266808e-06},
+        {0.00220804401411, -0.000362388943596, 8.93661866921e-06},
+        {0.00278280949183, -0.000408254662903, 1.2300152781e-05},
+    };
+    std::cout<<"Applying rgkfa18_7546 electron momentum correction"<<std::endl;
+    addElectronWCorrection(a0_7546, a1_7546, "RGK Fa18 7.546 GeV");
+  }
+  /*
   if (dataconfig == "rgkfa18_7546") {
     std::cout<<"Applying rgkfa18_7546 proton energy loss correction"<<std::endl;
-    //corr->AddPiecewiseCorrection(  // Momentum correction for proton RGK 7.546GeV Fa18 out
-    //    2212, {0.0, 10.0, 0.0 * M_PI / 180, 180.0 * M_PI / 180, 0.0 * M_PI / 180, 360.0 * M_PI / 180, MomentumCorrection::CD}, [](double p, double theta, double phi) {
-    //      theta = theta * 180.0 / M_PI;  // Convert theta to degrees
-    //      float A_p = 0.000381292 + 2.08512e-05 * theta;
-    //      float B_p = -0.00428696 + 0.000278655 * theta;
-    //      float C_p = 0.00455657 - 0.000263458 * theta;
-    //      return p;
-    //      //return p + (A_p + B_p * p + C_p * p * p);
-    //    });
-    corr->AddPiecewiseCorrection(  // Momentum correction for proton RGA 7.546GeV Fa18 out
+    corr->AddPiecewiseCorrection(  // Energy Loss correction for proton RGA 7.546GeV Fa18 out
         2212, {0.0, 10.0, 0.0 * M_PI / 180, 180.0 * M_PI / 180, 0.0 * M_PI / 180, 360.0 * M_PI / 180, MomentumCorrection::FD}, [](double p, double theta, double phi) {
           theta = theta * 180.0 / M_PI;  // Convert theta to degrees
           //float A_p = -0.0174808 + 0.00082825 * theta;
@@ -436,7 +512,7 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
           float C_p = 0.106318 - 0.00706329 * theta + 0.000122623 *theta*theta;
           return p + (A_p + B_p / p + C_p / (p * p));
         });
-  }
+  }*/
   if (dataconfig == "rgasp18_inb") {
     corr->AddPiecewiseCorrection(  // Momentum correction for proton RGA sp18 inb
         2212, {0.0, 10.0, 0.0 * M_PI / 180, 180.0 * M_PI / 180, 0.0 * M_PI / 180, 360.0 * M_PI / 180, MomentumCorrection::CD}, [](double p, double theta, double phi) {
@@ -529,6 +605,7 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   dvcsTask->SetDoMomentumCorrection(true);  // Set to true if you want to apply momentum correction
   dvcsTask->SetMomentumCorrection(corr);    // Set the momentum correction object
   dvcsTask->SetMaxEvents(0);                // Set the maximum number of events to process, 0 means no limit
+  dvcsTask->SetOutputWCSV(OutputWCSV);      // If true, writes electron_w_afterCorr.csv and skips all ROOT snapshots
   dvcsTask->SetAcceptEverything(false);     // Set to true to accept all events, false to apply cuts
   dvcsTask->SetQADBCuts(qadbCuts);          // <-- this now matters
   if(IsMC) {

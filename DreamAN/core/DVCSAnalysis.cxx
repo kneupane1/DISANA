@@ -2,11 +2,62 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <mutex>
 #include <stdexcept>
 
 #include "AnalysisTaskManager.h"
 #include "PerRunCounter.h"
 #include "ROOT/RVec.hxx"
+
+namespace {
+constexpr double kElectronMassGeV = 0.00051099895;
+constexpr double kProtonMassGeV = 0.9382720813;
+
+static inline int SelectedElectronIndex(const std::vector<int>& pid, const std::vector<int>& pass) {
+  const auto n = std::min(pid.size(), pass.size());
+  for (size_t i = 0; i < n; ++i) {
+    if (pid[i] == 11 && pass[i]) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+static inline float FloatAtIndex(const std::vector<float>& values, int idx) {
+  return (idx >= 0 && static_cast<size_t>(idx) < values.size()) ? values[idx] : -999.0f;
+}
+
+static inline int TrackSectorForParticle(int particleIndex,
+                                         const std::vector<int16_t>& trackPindex,
+                                         const std::vector<int16_t>& trackSector) {
+  if (particleIndex < 0) return -1;
+  for (size_t i = 0; i < trackPindex.size(); ++i) {
+    if (i >= trackSector.size()) continue;
+    if (trackPindex[i] != particleIndex) continue;
+    const int sector = static_cast<int>(trackSector[i]);
+    if (sector >= 1 && sector <= 6) return sector;
+  }
+  return -1;
+}
+
+static inline float InclusiveWFromElectron(float beamEnergyGeV, float electronPGeV, float electronThetaRad) {
+  if (beamEnergyGeV <= 0.0f || electronPGeV <= 0.0f) return -999.0f;
+  const double scatteredE = std::sqrt(electronPGeV * electronPGeV + kElectronMassGeV * kElectronMassGeV);
+  const double sinHalfTheta = std::sin(0.5 * electronThetaRad);
+  const double q2 = 4.0 * beamEnergyGeV * scatteredE * sinHalfTheta * sinHalfTheta;
+  const double nu = beamEnergyGeV - scatteredE;
+  const double w2 = kProtonMassGeV * kProtonMassGeV + 2.0 * kProtonMassGeV * nu - q2;
+  return w2 > 0.0 ? static_cast<float>(std::sqrt(w2)) : -999.0f;
+}
+
+static inline float PhiRadToWrappedDeg(float phiRad) {
+  float phiDeg = phiRad * 180.0f / static_cast<float>(M_PI);
+  while (phiDeg < 0.0f) phiDeg += 360.0f;
+  while (phiDeg >= 360.0f) phiDeg -= 360.0f;
+  return phiDeg;
+}
+}  // namespace
 
 static inline std::pair<std::string, std::string> PickRunEventCols(ROOT::RDF::RNode df) {
   auto cols = df.GetColumnNames();
@@ -236,7 +287,57 @@ std::vector<std::string> DVCSAnalysis::MinimalColumns() const {
   }
   return cols;
 }
+
+void DVCSAnalysis::WriteFinalElectronWCSV(ROOT::RDF::RNode df, const std::string& csvPath) {
+  auto out = df;
+  out = DefineOrRedefine(out, "WCSV_e_idx", SelectedElectronIndex, {"REC_Particle_pid", "REC_Particle_pass"});
+  out = DefineOrRedefine(out, "WCSV_e_p", FloatAtIndex, {"REC_Particle_p", "WCSV_e_idx"});
+  out = DefineOrRedefine(out, "WCSV_e_theta_rad", FloatAtIndex, {"REC_Particle_theta", "WCSV_e_idx"});
+  out = DefineOrRedefine(out, "WCSV_e_phi_rad", FloatAtIndex, {"REC_Particle_phi", "WCSV_e_idx"});
+  out = DefineOrRedefine(out, "WCSV_e_sector", TrackSectorForParticle, {"WCSV_e_idx", "REC_Track_pindex", "REC_Track_sector"});
+  out = DefineOrRedefine(out, "WCSV_W", [beam = fbeam_energy](float p, float theta) { return InclusiveWFromElectron(beam, p, theta); }, {"WCSV_e_p", "WCSV_e_theta_rad"});
+  out = DefineOrRedefine(out, "WCSV_e_phi", PhiRadToWrappedDeg, {"WCSV_e_phi_rad"});
+  out = DefineOrRedefine(out, "WCSV_e_theta", [](float theta) { return theta * 180.0f / static_cast<float>(M_PI); }, {"WCSV_e_theta_rad"});
+  out = out.Filter("WCSV_e_idx >= 0 && WCSV_W >= 0.8 && WCSV_W <= 1.1 && WCSV_e_sector >= 1 && WCSV_e_sector <= 6",
+                   "final electron W CSV rows");
+
+  std::ofstream csv(csvPath);
+  if (!csv.is_open()) {
+    throw std::runtime_error("DVCSAnalysis: cannot open W CSV output: " + csvPath);
+  }
+  csv << "W,e_p,e_phi,e_theta,e_sector\n";
+  csv << std::fixed << std::setprecision(8);
+
+  std::mutex csvMutex;
+  size_t rows = 0;
+  out.Foreach([&](float w, float p, float phi, float theta, int sector) {
+    std::lock_guard<std::mutex> lock(csvMutex);
+    csv << w << "," << p << "," << phi << "," << theta << "," << sector << "\n";
+    ++rows;
+  }, {"WCSV_W", "WCSV_e_p", "WCSV_e_phi", "WCSV_e_theta", "WCSV_e_sector"});
+
+  std::cout << "[SaveOutput] Wrote final corrected electron W CSV: " << csvPath
+            << " (rows = " << rows << ")\n";
+}
+
 void DVCSAnalysis::SaveOutput() {
+  if (fOutputWCSV) {
+    if (!dfSelected.has_value()) {
+      std::cerr << "DVCSAnalysis::SaveOutput: dfSelected not set!" << std::endl;
+      return;
+    }
+    ROOT::RDF::RNode finalDf = dfSelected_afterFid_afterCorr.has_value()
+                                   ? *dfSelected_afterFid_afterCorr
+                                   : (dfSelected_afterFid.has_value() ? *dfSelected_afterFid : *dfSelected);
+    const std::string csvPath = fOutputDir + "/" + fOutputWCSVName;
+    std::cout << "[SaveOutput] Output-W mode ON — writing CSV only, no ROOT snapshots.\n";
+    WriteFinalElectronWCSV(finalDf, csvPath);
+    if (fIsQADBCut) {
+      std::cout << "\n[QADB] total accumulated charge analyzed: " << fQADBCuts->GetAccumulatedCharge() / 1e6 << " mC (Do NOT use this number if you enable MT)\n";
+    }
+    return;
+  }
+
   if (IsMC) {
     // snapshot of the MC bank for efficiency and other studies
     dforginal->Snapshot(

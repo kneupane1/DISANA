@@ -4,6 +4,9 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
+#include <utility>
+#include <vector>
 #include <TF1.h>
 #include <TGraphErrors.h>
 
@@ -45,6 +48,90 @@ ROOT::RDF::RNode DefineRecoProtonSector(ROOT::RDF::RNode df) {
          "REC_Track_sector"});
 }
 
+double ProtonEfficiencyDataWeight(int pro_det_region,
+                                  double recpro_theta,
+                                  double recpro_p,
+                                  int recpro_sector) {
+    double pro_theta = recpro_theta * 180.0 / std::acos(-1.0);
+
+    auto EvalPol4 = [](double x,
+                       double p0,
+                       double p1,
+                       double p2,
+                       double p3,
+                       double p4) {
+        return p0 + x * (p1 + x * (p2 + x * (p3 + x * p4)));
+    };
+
+    if (pro_det_region == 2) {
+        // CD proton weights can also be split by recpro_p here.
+        // Example:
+        // if (recpro_p < 0.6) { ... }
+        double weight2  = 194.113650031;
+        weight2 = weight2 - 14.9235275433 * pro_theta;
+        weight2 = weight2 + 0.431130425403 * pro_theta * pro_theta;
+        weight2 = weight2 - 0.00551949772084 * pro_theta * pro_theta * pro_theta;
+        weight2 = weight2 + 0.0000263906217339 * pro_theta * pro_theta * pro_theta * pro_theta;
+        return 1.0/weight2;
+    }
+
+    if (pro_det_region == 1) {
+        if (recpro_p >= 0.0 && recpro_p < 1.2) {
+            double weight1 = 1.0;
+
+            if (recpro_sector == 1) {
+                weight1 = EvalPol4(pro_theta,
+                                    -19.7716898552,
+                                    3.01402168055,
+                                    -0.163630873818,
+                                    0.0038696341387,
+                                    -3.35266065754e-05);
+            } else if (recpro_sector == 2) {
+                weight1 = EvalPol4(pro_theta,
+                                    18.7984939041,
+                                    -2.35340457263,
+                                    0.110872026708,
+                                    -0.00222906760896,
+                                    1.60904132746e-05);
+            } else if (recpro_sector == 3) {
+                weight1 = EvalPol4(pro_theta,
+                                    5.63566735157,
+                                    -0.522093175844,
+                                    0.0173336373725,
+                                    -0.000143110588775,
+                                    -1.10839774731e-06);
+            } else if (recpro_sector == 4) {
+                weight1 = EvalPol4(pro_theta,
+                                    -30.1303875783,
+                                    4.2743643373,
+                                    -0.219263641405,
+                                    0.00495202478552,
+                                    -4.16003363644e-05);
+            } else if (recpro_sector == 5) {
+                weight1 = EvalPol4(pro_theta,
+                                    24.284454148,
+                                    -3.04287347804,
+                                    0.14139967477,
+                                    -0.00278355773718,
+                                    1.93900421411e-05);
+            } else if (recpro_sector == 6) {
+                weight1 = EvalPol4(pro_theta,
+                                    -7.37655860381,
+                                    1.11750148989,
+                                    -0.058354913403,
+                                    0.0013760829902,
+                                    -1.23555511421e-05);
+            }
+
+            return 1.0 / weight1;
+        }
+
+        return 1.0;
+    }
+
+    return 1.0;
+}
+
 
 // ================================================================
 // Plot proton theta, p, phi comparison + Data/MC ratio
@@ -78,33 +165,39 @@ void PlotProtonThetaPComparison(ROOT::RDF::RNode df1,
         .Define("recpro_theta_deg", "recpro_theta * 180.0 / TMath::Pi()")
         .Define("recpro_phi_deg",   "recpro_phi   * 180.0 / TMath::Pi()");
 
-    auto df2_deg = df2
+    auto df2_weighted = df2
+        .Define("data_pro_eff_weight",
+                "ProtonEfficiencyDataWeight(pro_det_region, recpro_theta, recpro_p, recpro_sector)");
+
+    auto df2_deg = df2_weighted
         .Define("recpro_theta_deg", "recpro_theta * 180.0 / TMath::Pi()")
         .Define("recpro_phi_deg",   "recpro_phi   * 180.0 / TMath::Pi()");
 
     auto h_theta_mc = df1_deg.Histo1D(
         {Form("h_theta_mc_%s", tag.c_str()),
          ";Proton #theta [deg];Counts / fb^{-1}",
-         15, theta_min, theta_max},
+         30, theta_min, theta_max},
         "recpro_theta_deg");
 
     auto h_theta_data = df2_deg.Histo1D(
         {Form("h_theta_data_%s", tag.c_str()),
          ";Proton #theta [deg];Counts / fb^{-1}",
-         15, theta_min, theta_max},
-        "recpro_theta_deg");
+         30, theta_min, theta_max},
+        "recpro_theta_deg",
+        "data_pro_eff_weight");
 
     auto h_p_mc = df1.Histo1D(
         {Form("h_p_mc_%s", tag.c_str()),
          ";Proton Momentum p [GeV/c];Counts / fb^{-1}",
-         15, p_min, p_max},
+         30, p_min, p_max},
         "recpro_p");
 
-    auto h_p_data = df2.Histo1D(
+    auto h_p_data = df2_weighted.Histo1D(
         {Form("h_p_data_%s", tag.c_str()),
          ";Proton Momentum p [GeV/c];Counts / fb^{-1}",
-         15, p_min, p_max},
-        "recpro_p");
+         30, p_min, p_max},
+        "recpro_p",
+        "data_pro_eff_weight");
 
     auto h_phi_mc = df1_deg.Histo1D(
         {Form("h_phi_mc_%s", tag.c_str()),
@@ -116,7 +209,8 @@ void PlotProtonThetaPComparison(ROOT::RDF::RNode df1,
         {Form("h_phi_data_%s", tag.c_str()),
          ";Proton #phi [deg];Counts / fb^{-1}",
          30, 0.0, 360.0},
-        "recpro_phi_deg");
+        "recpro_phi_deg",
+        "data_pro_eff_weight");
 
     h_theta_mc->Scale(1.0 / luminosity1);
     h_p_mc->Scale(1.0 / luminosity1);
@@ -317,6 +411,69 @@ void PlotProtonThetaPComparison(ROOT::RDF::RNode df1,
     std::cout << "Saved theta ratio fit parameters to: " << fit_txt_outname << std::endl;
 }
 
+std::string MomentumRangeTag(double p_min, double p_max) {
+    auto format = [](double v) {
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << v;
+        std::string s = ss.str();
+        std::replace(s.begin(), s.end(), '.', 'p');
+        return s;
+    };
+    return "p" + format(p_min) + "_" + format(p_max);
+}
+
+void PlotProtonThetaPComparisonByPRange(
+        ROOT::RDF::RNode df1,
+        ROOT::RDF::RNode df2,
+        const std::vector<std::pair<double, double>>& p_ranges,
+        const std::string& label1,
+        const std::string& label2,
+        const std::string& outname_base,
+        double theta_min,
+        double theta_max,
+        double luminosity1,
+        double luminosity2,
+        int theta_ratio_fit_order = 0) {
+
+    for (const auto& p_range : p_ranges) {
+        const double p_min = p_range.first;
+        const double p_max = p_range.second;
+
+        if (p_max <= p_min) {
+            std::cerr << "Skip invalid proton p range: ["
+                      << p_min << ", " << p_max << "]" << std::endl;
+            continue;
+        }
+
+        const std::string pcut = Form("recpro_p >= %.12g && recpro_p < %.12g", p_min, p_max);
+        const std::string ptag = MomentumRangeTag(p_min, p_max);
+        const std::string mc_filter_label = "MC proton " + ptag;
+        const std::string data_filter_label = "Data proton " + ptag;
+
+        std::string outname = outname_base;
+        const size_t pos = outname.rfind(".png");
+        if (pos != std::string::npos) {
+            outname.replace(pos, 4, "_" + ptag + ".png");
+        } else {
+            outname += "_" + ptag + ".png";
+        }
+
+        PlotProtonThetaPComparison(
+            df1.Filter(pcut, mc_filter_label),
+            df2.Filter(pcut, data_filter_label),
+            label1 + " " + ptag,
+            label2 + " " + ptag,
+            outname,
+            theta_min,
+            theta_max,
+            p_min,
+            p_max,
+            luminosity1,
+            luminosity2,
+            theta_ratio_fit_order);
+    }
+}
+
 
 // ================================================================
 // Main
@@ -339,7 +496,7 @@ void analysisProEff() {
 
     ROOT::RDF::RNode df_afterFid_7546_pi0MC =
         GetSlim_exclusive(df_afterFid_7546_pi0MC_init,
-                          "dfSlim_7546_pi0MC.root",
+                          "ProtonEff/dfSlim_7546_pi0MC.root",
                           "dfSlim_7546_pi0MC",
                           false);
 
@@ -364,7 +521,7 @@ void analysisProEff() {
 
     ROOT::RDF::RNode df_afterFid_7546_pi0data =
         GetSlim_exclusive(df_afterFid_7546_pi0data_init,
-                          "dfSlim_7546_pi0data.root",
+                          "ProtonEff/dfSlim_7546_pi0data.root",
                           "dfSlim_7546_pi0data",
                           false);
 
@@ -398,6 +555,31 @@ void analysisProEff() {
     df_final_OnlPi0_7546_pi0data =
         DefineRecoProtonSector(df_final_OnlPi0_7546_pi0data);
 
+    // Configure proton momentum slices here.
+    // Each range is [p_min, p_max) in GeV/c.
+    std::vector<std::pair<double, double>> fd_proton_p_ranges = {
+        //{0.367, 0.458},
+        //{0.458, 0.567},
+        //{0.567, 0.672},
+        //{0.672, 0.775},
+        //{0.775, 0.876},
+        //{0.876, 1.074},
+        //{1.074, 1.270},
+        {0.0, 1.2},
+    };
+
+    std::vector<std::pair<double, double>> cd_proton_p_ranges = {
+        //{0.2, 0.3},
+        //{0.367, 0.458},
+        //{0.458, 0.567},
+        //{0.567, 0.672},
+        //{0.672, 0.775},
+        //{0.775, 0.876},
+        //{0.876, 1.074},
+        //{1.074, 1.270},
+        {0.0, 1.2},
+    };
+
     // ============================================================
     // FD proton: overall
     // ============================================================
@@ -411,20 +593,22 @@ void analysisProEff() {
             "pro_det_region == 1",
             "Proton in FD");
 
-    PlotProtonThetaPComparison(
+    PlotProtonThetaPComparisonByPRange(
         df_pi0MC_FD,
         df_pi0Data_FD,
+        fd_proton_p_ranges,
         "Pi0 MC FD",
         "Pi0 Data FD",
         "ProtonThetaPPhiComparison_FD.png",
-        15.0, 40.0,
-        0.4, 1.2,
+        10.0, 50.0,
         luminosity_pi0MC,
-        luminosity_pi0data);
+        luminosity_pi0data,
+        4);
 
     // ============================================================
     // FD proton: sector-by-sector
     // ============================================================
+    
     for (int sec = 1; sec <= 6; ++sec) {
         auto df_pi0MC_FD_sec =
             df_final_OnlPi0_7546_pi0MC.Filter(
@@ -436,18 +620,19 @@ void analysisProEff() {
                 Form("pro_det_region == 1 && recpro_sector == %d", sec),
                 Form("FD proton sector %d", sec));
 
-        PlotProtonThetaPComparison(
+        PlotProtonThetaPComparisonByPRange(
             df_pi0MC_FD_sec,
             df_pi0Data_FD_sec,
+            fd_proton_p_ranges,
             Form("Pi0 MC FD S%d", sec),
             Form("Pi0 Data FD S%d", sec),
             Form("ProtonThetaPPhiComparison_FD_S%d.png", sec),
-            15.0, 40.0,
-            0.4, 1.2,
+            10.0, 50.0,
             luminosity_pi0MC,
-            luminosity_pi0data);
+            luminosity_pi0data,
+            4);
     }
-
+    
     // ============================================================
     // CD proton: overall
     // ============================================================
@@ -461,14 +646,14 @@ void analysisProEff() {
             "pro_det_region == 2",
             "Proton in CD");
 
-    PlotProtonThetaPComparison(
+    PlotProtonThetaPComparisonByPRange(
         df_pi0MC_CD,
         df_pi0Data_CD,
+        cd_proton_p_ranges,
         "Pi0 MC (CD Proton)",
         "Pi0 Data (CD Proton)",
         "ProtonThetaPPhiComparison_CD.png",
-        40.0, 64.0,
-        0.2, 1.2,
+        35.0, 75.0,
         luminosity_pi0MC,
         luminosity_pi0data,
         4);

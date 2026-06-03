@@ -52,9 +52,12 @@ class DVCSAnalysis : public AnalysisTask {
   void SetDoQADBCuts(bool charge_output) { fIsQADBCut = charge_output; }
 
   void SetOptimizeColumns(bool optimize) { fOptimizeColumns = optimize; }
+  void SetOutputWCSV(bool output) { fOutputWCSV = output; }
+  void SetOutputWCSVName(const std::string& name) { fOutputWCSVName = name; }
 
  private:
   std::vector<std::string> MinimalColumns() const;
+  void WriteFinalElectronWCSV(ROOT::RDF::RNode df, const std::string& csvPath);
   bool IsMC = false;
   bool fDoInvMassCut = false;  // Flag to indicate if invMass cut is applied
   bool fAcceptAll = false;  // Flag to indicate if all events are accepted without cuts
@@ -64,6 +67,8 @@ class DVCSAnalysis : public AnalysisTask {
   bool fFTonConfig = true;
   bool fDoMomentumCorrection = false;  // Flag to indicate if momentum correction is applied
   bool fOptimizeColumns = false;  // Flag to indicate if column optimization is enabled
+  bool fOutputWCSV = false;  // Output final corrected electron W CSV and skip ROOT snapshots
+  std::string fOutputWCSVName = "electron_w_afterCorr.csv";
 
   bool fIsQADBCut = false;  // Flag to indicate if QADB cut is applied
   bool fChargeOutput = false; // Flag to indicate if output the accumulated charge from QADB
