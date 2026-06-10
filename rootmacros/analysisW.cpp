@@ -466,6 +466,20 @@ void Style2D(TH2D* h, const std::string& xVar, const std::string& yTitle) {
   h->GetYaxis()->SetTitleOffset(1.20);
 }
 
+void DrawProtonMassLineForWVsPhi(TH2D* h, const std::string& xVar, const std::string& yTitle) {
+  if (!h || xVar != "phi" || yTitle.find("W") == std::string::npos) return;
+  const double yMin = h->GetYaxis()->GetXmin();
+  const double yMax = h->GetYaxis()->GetXmax();
+  if (kProtonMassGeV < yMin || kProtonMassGeV > yMax) return;
+
+  auto* line = new TLine(h->GetXaxis()->GetXmin(), kProtonMassGeV, h->GetXaxis()->GetXmax(), kProtonMassGeV);
+  line->SetLineColor(kRed + 1);
+  line->SetLineStyle(2);
+  line->SetLineWidth(3);
+  line->SetBit(TObject::kCanDelete);
+  line->Draw("SAME");
+}
+
 void StyleGraph(TGraphErrors* g, const std::string& xVar, double yTarget, const std::string& peakLabel) {
   g->SetTitle("");
   g->SetMarkerStyle(20);
@@ -767,6 +781,7 @@ void DrawWMapOnly(TH2D* displayHist,
   c2->SetTicks(1, 1);
   Style2D(displayHist, xVar, yTitle);
   displayHist->Draw("COLZ");
+  DrawProtonMassLineForWVsPhi(displayHist, xVar, yTitle);
   TLatex latex;
   latex.SetNDC();
   latex.SetTextFont(42);
@@ -795,6 +810,7 @@ TGraphErrors* DrawOneWMapAndPeaks(TH2D* displayHist,
     c2->SetTicks(1, 1);
     Style2D(displayHist, xVar, yTitle);
     displayHist->Draw("COLZ");
+    DrawProtonMassLineForWVsPhi(displayHist, xVar, yTitle);
     TLatex latex;
     latex.SetNDC();
     latex.SetTextFont(42);
@@ -1239,7 +1255,7 @@ void DrawGlobalPhiThetaStrip(const std::vector<TGraphErrors*>& graphs,
 
 }  // namespace
 
-void analysisW(const std::string& csvPath = "../build/Elastic7546Corr/electron_w_afterCorr_merged_raw.csv",
+void analysisW(const std::string& csvPath = "../build/Elastic6535Corr/electron_w_afterCorr_merged_raw.csv",
                const std::string& outDir = "ElectronWCorrectionCSV",
                double targetW = kProtonMassGeV,
                int minEntries = 80,
@@ -1247,7 +1263,7 @@ void analysisW(const std::string& csvPath = "../build/Elastic7546Corr/electron_w
                double sector1PhiStartDeg = 335.0,
                int nPhiBinsPerSector = 6,
                const std::vector<double>& thetaBinEdges = {6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 13.0, 15.0, 25.0},
-               double beamEnergyGeV = 7.546,
+               double beamEnergyGeV = 6.535,
                int fitParameterPolyOrder = 2) {
   TStopwatch timer;
   timer.Start();

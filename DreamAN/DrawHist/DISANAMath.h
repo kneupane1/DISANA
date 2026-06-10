@@ -24,6 +24,7 @@
 
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 double NormalizeHCorrByMiddle(TH1* hCorr)
 {
@@ -124,14 +125,58 @@ class BinManager {
   const std::vector<double> &GetQ2Bins() const { return q2_bins_; }
   const std::vector<double> &GetTBins() const { return t_bins_; }
   const std::vector<double> &GetXBBins() const { return xb_bins_; }
+  const std::vector<double> &GetXBBins(size_t q2_bin) const {
+    if (xb_bins_by_q2_.empty()) return xb_bins_;
+    if (q2_bin >= xb_bins_by_q2_.size()) {
+      throw std::out_of_range("Q2 bin index is outside SetXBBinsByQ2 configuration");
+    }
+    return xb_bins_by_q2_[q2_bin];
+  }
+  const std::vector<std::vector<double>> &GetXBBinsByQ2() const { return xb_bins_by_q2_; }
+  bool HasQ2DependentXBBins() const { return !xb_bins_by_q2_.empty(); }
+  size_t GetMaxXBBinCount() const {
+    if (xb_bins_by_q2_.empty()) return xb_bins_.size() > 1 ? xb_bins_.size() - 1 : 0;
+    size_t max_bins = 0;
+    for (const auto &edges : xb_bins_by_q2_) {
+      max_bins = std::max(max_bins, edges.size() > 1 ? edges.size() - 1 : size_t{0});
+    }
+    return max_bins;
+  }
   const std::vector<double> &GetWBins() const { return W_bins_; }
   const std::vector<double> &GetTprimeBins() const { return tprime_bins_; }
   const std::vector<double>& GetCosThetaKKBins() const { return cos_thetaKK_bins_; }
   const std::vector<double>& GetTrentoPhiBins() const { return trento_phi_bins_; }
   const std::vector<double>& GetZPhiBins() const { return z_phi_bins_; }
-  void SetQ2Bins(const std::vector<double> &v) { q2_bins_ = v; }
-  void SetTBins(const std::vector<double> &v) { t_bins_ = v; }
-  void SetXBBins(const std::vector<double> &v) { xb_bins_ = v; }
+  void SetQ2Bins(const std::vector<double> &v) {
+    ValidateEdges(v, "Q2");
+    if (!xb_bins_by_q2_.empty() && xb_bins_by_q2_.size() != v.size() - 1) {
+      throw std::invalid_argument("New Q2 bins do not match the existing SetXBBinsByQ2 configuration");
+    }
+    q2_bins_ = v;
+  }
+  void SetTBins(const std::vector<double> &v) {
+    ValidateEdges(v, "t");
+    t_bins_ = v;
+  }
+  void SetXBBins(const std::vector<double> &v) {
+    ValidateEdges(v, "xB");
+    xb_bins_ = v;
+    xb_bins_by_q2_.clear();
+  }
+  void SetXBBinsByQ2(const std::vector<std::vector<double>> &v) {
+    const size_t n_q2 = q2_bins_.size() > 1 ? q2_bins_.size() - 1 : 0;
+    if (v.size() != n_q2) {
+      throw std::invalid_argument("SetXBBinsByQ2 requires exactly one xB edge vector per Q2 bin");
+    }
+    for (const auto &edges : v) ValidateEdges(edges, "xB");
+    xb_bins_by_q2_ = v;
+    xb_bins_.clear();
+    for (const auto &edges : xb_bins_by_q2_) {
+      xb_bins_.insert(xb_bins_.end(), edges.begin(), edges.end());
+    }
+    std::sort(xb_bins_.begin(), xb_bins_.end());
+    xb_bins_.erase(std::unique(xb_bins_.begin(), xb_bins_.end()), xb_bins_.end());
+  }
   void SetWBins(const std::vector<double> &v) { W_bins_ = v; }
   void SetTprimeBins(const std::vector<double> &v) { tprime_bins_ = v; }
   void SetCosThetaKKBins(const std::vector<double>& v) { cos_thetaKK_bins_ = v; }
@@ -290,7 +335,24 @@ class BinManager {
   };
 
  private:
-  std::vector<double> q2_bins_, t_bins_, xb_bins_, W_bins_, tprime_bins_, cos_thetaKK_bins_,trento_phi_bins_,  z_phi_bins_;  
+  static void ValidateEdges(const std::vector<double> &edges, const char *name) {
+    if (edges.size() < 2 || !std::is_sorted(edges.begin(), edges.end()) ||
+        std::adjacent_find(edges.begin(), edges.end()) != edges.end()) {
+      throw std::invalid_argument(std::string(name) + " bin edges must contain at least two strictly increasing values");
+    }
+  }
+
+  void ValidateQ2DependentXBBins() const {
+    if (xb_bins_by_q2_.empty()) return;
+    const size_t n_q2 = q2_bins_.size() > 1 ? q2_bins_.size() - 1 : 0;
+    if (xb_bins_by_q2_.size() != n_q2) {
+      throw std::invalid_argument("SetXBBinsByQ2 requires exactly one xB edge vector per Q2 bin");
+    }
+    for (const auto &edges : xb_bins_by_q2_) ValidateEdges(edges, "xB");
+  }
+
+  std::vector<double> q2_bins_, t_bins_, xb_bins_, W_bins_, tprime_bins_, cos_thetaKK_bins_,trento_phi_bins_,  z_phi_bins_;
+  std::vector<std::vector<double>> xb_bins_by_q2_;
 };
 
 // -----------------------------------------------------------------------------
@@ -808,17 +870,16 @@ class DISANAMath {
 
     const auto &q2_bins = bins.GetQ2Bins();
     const auto &t_bins = bins.GetTBins();
-    const auto &xb_bins = bins.GetXBBins();
-
     const size_t n_q2 = q2_bins.size() - 1;
     const size_t n_t = t_bins.size() - 1;
-    const size_t n_xb = xb_bins.size() - 1;
+    const size_t n_xb = bins.GetMaxXBBinCount();
 
     std::vector<std::vector<std::vector<TH1D *>>> hist(n_xb, std::vector<std::vector<TH1D *>>(n_q2, std::vector<TH1D *>(n_t, nullptr)));
     std::vector<std::vector<std::vector<double>>> q2xBtbins(n_xb, std::vector<std::vector<double>>(n_q2, std::vector<double>(n_t, 0.0)));
 
-    for (size_t ix = 0; ix < n_xb; ++ix)
-      for (size_t iq = 0; iq < n_q2; ++iq)
+    for (size_t iq = 0; iq < n_q2; ++iq) {
+      const auto &xb_bins = bins.GetXBBins(iq);
+      for (size_t ix = 0; ix + 1 < xb_bins.size(); ++ix)
         for (size_t it = 0; it < n_t; ++it) {
           const double qmin = q2_bins[iq], qmax = q2_bins[iq + 1];
           const double tmin = t_bins[it], tmax = t_bins[it + 1];
@@ -829,6 +890,7 @@ class DISANAMath {
           hist[ix][iq][it]->SetDirectory(nullptr);
           q2xBtbins[ix][iq][it] = (qmax - qmin) * (tmax - tmin) * (xbmax - xbmin);
         }
+    }
 
     auto findBin = [](double v, const std::vector<double> &e) -> int {
       auto it = std::upper_bound(e.begin(), e.end(), v);
@@ -837,7 +899,9 @@ class DISANAMath {
     };
 
     auto fill = [&](double Q2, double t, double xB, double phi) {
-      int iq = findBin(Q2, q2_bins), it = findBin(t, t_bins), ix = findBin(xB, xb_bins);
+      int iq = findBin(Q2, q2_bins), it = findBin(t, t_bins);
+      if (iq < 0 || it < 0) return;
+      int ix = findBin(xB, bins.GetXBBins(static_cast<size_t>(iq)));
       if (iq >= 0 && it >= 0 && ix >= 0) hist[ix][iq][it]->Fill(phi);
     };
 
@@ -875,11 +939,9 @@ class DISANAMath {
 
     const auto &q2_bins = bins.GetQ2Bins();
     const auto &t_bins  = bins.GetTBins();
-    const auto &xb_bins = bins.GetXBBins();
-
     const size_t n_q2 = q2_bins.size() - 1;
     const size_t n_t  = t_bins.size()  - 1;
-    const size_t n_xb = xb_bins.size() - 1;
+    const size_t n_xb = bins.GetMaxXBBinCount();
 
     // -----------------------
     // helper: find bin index
@@ -899,8 +961,9 @@ class DISANAMath {
     std::vector<std::vector<std::vector<double>>> q2xBtbins(
         n_xb, std::vector<std::vector<double>>(n_q2, std::vector<double>(n_t, 0.0)));
 
-    for (size_t ix = 0; ix < n_xb; ++ix)
-      for (size_t iq = 0; iq < n_q2; ++iq)
+    for (size_t iq = 0; iq < n_q2; ++iq) {
+      const auto &xb_bins = bins.GetXBBins(iq);
+      for (size_t ix = 0; ix + 1 < xb_bins.size(); ++ix)
         for (size_t it = 0; it < n_t; ++it) {
           const double qmin = q2_bins[iq], qmax = q2_bins[iq + 1];
           const double tmin = t_bins[it],  tmax = t_bins[it + 1];
@@ -916,6 +979,7 @@ class DISANAMath {
 
           q2xBtbins[ix][iq][it] = (qmax - qmin) * (tmax - tmin) * (xbmax - xbmin);
         }
+    }
 
     // ------------------------------------------------------------
     // thread-safe filling: one histogram set per slot, then merge
@@ -931,6 +995,7 @@ class DISANAMath {
       for (size_t ix = 0; ix < n_xb; ++ix)
         for (size_t iq = 0; iq < n_q2; ++iq)
           for (size_t it = 0; it < n_t; ++it) {
+            if (!hist[ix][iq][it]) continue;
             // clone "shape" (bins), unique name per slot
             hslot[s][ix][iq][it] = (TH1D*)hist[ix][iq][it]->Clone(
                 Form("%s_slot%u", hist[ix][iq][it]->GetName(), s));
@@ -945,7 +1010,7 @@ class DISANAMath {
                         double recpro_p, double recpro_theta, double recpro_phi) {
       const int iq = findBin(Q2, q2_bins);
       const int it = findBin(t,  t_bins);
-      const int ix = findBin(xB, xb_bins);
+      const int ix = iq >= 0 ? findBin(xB, bins.GetXBBins(static_cast<size_t>(iq))) : -1;
       if (iq < 0 || it < 0 || ix < 0) return;
 
       const DVCSWeightInput weightInput{pho_det_region, pro_det_region, recel_p, recel_theta, recel_phi,
@@ -963,6 +1028,7 @@ class DISANAMath {
       for (size_t ix = 0; ix < n_xb; ++ix)
         for (size_t iq = 0; iq < n_q2; ++iq)
           for (size_t it = 0; it < n_t; ++it) {
+            if (!hist[ix][iq][it]) continue;
             hist[ix][iq][it]->Add(hslot[s][ix][iq][it]);
             delete hslot[s][ix][iq][it];
             hslot[s][ix][iq][it] = nullptr;
@@ -1094,7 +1160,7 @@ class DISANAMath {
                                                             ROOT::RDF::RNode df_pi0_data, const BinManager &xBins) {
     const size_t n_t = xBins.GetTBins().size() - 1;
     const size_t n_q2 = xBins.GetQ2Bins().size() - 1;
-    const size_t n_xb = xBins.GetXBBins().size() - 1;
+    const size_t n_xb = xBins.GetMaxXBBinCount();
 
     DISANAMath pi0Corr;
     auto df_dvcs_pi0mc_CrossSection = pi0Corr.ComputeDVCS_CrossSection(df_dvcs_pi0mc, xBins, 1);
@@ -1131,7 +1197,7 @@ class DISANAMath {
   std::vector<std::vector<std::vector<TH1D *>>> CalcAcceptanceCorr(ROOT::RDF::RNode df_gen_dvcsmc, ROOT::RDF::RNode df_accept_dvcsmc, const BinManager &xBins) {
     const size_t n_t = xBins.GetTBins().size() - 1;
     const size_t n_q2 = xBins.GetQ2Bins().size() - 1;
-    const size_t n_xb = xBins.GetXBBins().size() - 1;
+    const size_t n_xb = xBins.GetMaxXBBinCount();
 
     DISANAMath AccCorr;
     auto df_gen_dvcsmc_CrossSection = AccCorr.ComputeDVCS_CrossSection(df_gen_dvcsmc, xBins, 1);
@@ -1162,7 +1228,7 @@ class DISANAMath {
   std::vector<std::vector<std::vector<TH1D *>>> CalcEfficiencyCorr_old(ROOT::RDF::RNode df_dvcsmc_bkg, ROOT::RDF::RNode df_dvcsmc_nobkg, const BinManager &xBins) {
     const size_t n_t = xBins.GetTBins().size() - 1;
     const size_t n_q2 = xBins.GetQ2Bins().size() - 1;
-    const size_t n_xb = xBins.GetXBBins().size() - 1;
+    const size_t n_xb = xBins.GetMaxXBBinCount();
 
     DISANAMath EffCorr;
     auto df_dvcsmc_bkg_CrossSection = EffCorr.ComputeDVCS_CrossSection(df_dvcsmc_bkg, xBins, 1);
@@ -1198,7 +1264,7 @@ class DISANAMath {
   {
     const size_t n_t  = xBins.GetTBins().size()  - 1;
     const size_t n_q2 = xBins.GetQ2Bins().size() - 1;
-    const size_t n_xb = xBins.GetXBBins().size() - 1;
+    const size_t n_xb = xBins.GetMaxXBBinCount();
 
     DISANAMath EffCorr;
     auto df_dvcsmc_bkg_CrossSection   = EffCorr.ComputeDVCS_CrossSection(df_dvcsmc_bkg,   xBins, 1);
@@ -1290,7 +1356,7 @@ class DISANAMath {
   std::vector<std::vector<std::vector<TH1D *>>> CalcRadiativeCorr(ROOT::RDF::RNode df_dvcs_rad, ROOT::RDF::RNode df_dvcs_norad, const BinManager &xBins) {
     const size_t n_t = xBins.GetTBins().size() - 1;
     const size_t n_q2 = xBins.GetQ2Bins().size() - 1;
-    const size_t n_xb = xBins.GetXBBins().size() - 1;
+    const size_t n_xb = xBins.GetMaxXBBinCount();
 
     DISANAMath RadCorr;
     auto df_dvcs_rad_CrossSection = RadCorr.ComputeDVCS_CrossSection(df_dvcs_rad, xBins, 1);
@@ -1318,7 +1384,7 @@ class DISANAMath {
   std::vector<std::vector<std::vector<TH1D *>>> CalcP1Cut(ROOT::RDF::RNode df_dvcsmc_p1cut, ROOT::RDF::RNode df_dvcsmc_norad, const BinManager &xBins) {
     const size_t n_t = xBins.GetTBins().size() - 1;
     const size_t n_q2 = xBins.GetQ2Bins().size() - 1;
-    const size_t n_xb = xBins.GetXBBins().size() - 1;
+    const size_t n_xb = xBins.GetMaxXBBinCount();
 
     DISANAMath P1Corr;
     auto df_dvcsmc_p1cut_CrossSection = P1Corr.ComputeDVCS_CrossSection(df_dvcsmc_p1cut, xBins, 1);

@@ -841,11 +841,10 @@ class DISANAcomparer {
   }
   /// get mean values of Q^2 and x_B
   std::vector<std::vector<std::vector<std::tuple<double, double, double>>>> getMeanQ2xBt_old(const BinManager& bins, std::unique_ptr<DISANAplotter>& plotter) {
-    const auto& xb_bins = bins.GetXBBins();
     const auto& q2_bins = bins.GetQ2Bins();
     const auto& t_bins = bins.GetTBins();
 
-    size_t n_xb = xb_bins.size() - 1;
+    size_t n_xb = bins.GetMaxXBBinCount();
     size_t n_q2 = q2_bins.size() - 1;
     size_t n_t = t_bins.size() - 1;
 
@@ -856,6 +855,8 @@ class DISANAcomparer {
 
     for (size_t ix = 0; ix < n_xb; ++ix) {
       for (size_t iq = 0; iq < n_q2; ++iq) {
+        const auto& xb_bins = bins.GetXBBins(iq);
+        if (ix + 1 >= xb_bins.size()) continue;
         for (size_t it = 0; it < n_t; ++it) {
           double xb_lo = xb_bins[ix], xb_hi = xb_bins[ix + 1];
           double q2_lo = q2_bins[iq], q2_hi = q2_bins[iq + 1];
@@ -879,11 +880,10 @@ class DISANAcomparer {
 
   std::vector<std::vector<std::vector<std::tuple<double, double, double>>>>
   getMeanQ2xBt(const BinManager& bins, std::unique_ptr<DISANAplotter>& plotter) {
-    const auto& xb_bins = bins.GetXBBins();
     const auto& q2_bins = bins.GetQ2Bins();
     const auto& t_bins  = bins.GetTBins();
   
-    const size_t n_xb = xb_bins.size() - 1;
+    const size_t n_xb = bins.GetMaxXBBinCount();
     const size_t n_q2 = q2_bins.size() - 1;
     const size_t n_t  = t_bins.size() - 1;
   
@@ -921,12 +921,13 @@ class DISANAcomparer {
     );
   
     auto rdf_binned = rdf
-      .Define("ix_bin", [xb_bins, findBin](double xB) {
-        return findBin(xB, xb_bins);
-      }, {"xB"})
       .Define("iq_bin", [q2_bins, findBin](double Q2) {
         return findBin(Q2, q2_bins);
       }, {"Q2"})
+      .Define("ix_bin", [bins, findBin](double xB, int iq) {
+        if (iq < 0) return -1;
+        return findBin(xB, bins.GetXBBins(static_cast<size_t>(iq)));
+      }, {"xB", "iq_bin"})
       .Define("it_bin", [t_bins, findBin](double t) {
         return findBin(t, t_bins);
       }, {"t"})
@@ -1429,6 +1430,70 @@ class DISANAcomparer {
     }
   }
 
+  std::vector<double> GetAllConfiguredXBEdges() const {
+    std::vector<double> edges;
+    const auto& q2_edges = fXbins.GetQ2Bins();
+    for (size_t iq = 0; iq + 1 < q2_edges.size(); ++iq) {
+      const auto& row_edges = fXbins.GetXBBins(iq);
+      edges.insert(edges.end(), row_edges.begin(), row_edges.end());
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    return edges;
+  }
+
+  void DrawConfiguredXBQ2Grid(double xBmin, double xBmax,
+                              double Q2min, double Q2max,
+                              int lineStyle=2, int lineWidth=1,
+                              int lineColor=kRed) {
+    const auto& q2_edges = fXbins.GetQ2Bins();
+    for (size_t iq = 0; iq + 1 < q2_edges.size(); ++iq) {
+      const double qlo = q2_edges[iq];
+      const double qhi = q2_edges[iq + 1];
+      const auto& xb_edges = fXbins.GetXBBins(iq);
+      if (qhi < Q2min || qlo > Q2max || xb_edges.size() < 2) continue;
+
+      const double ylo = std::max(qlo, Q2min);
+      const double yhi = std::min(qhi, Q2max);
+      for (double xb : xb_edges) {
+        if (xb < xBmin || xb > xBmax) continue;
+        TLine* line = new TLine(xb, ylo, xb, yhi);
+        line->SetLineStyle(lineStyle);
+        line->SetLineWidth(lineWidth);
+        line->SetLineColor(lineColor);
+        line->Draw("SAME");
+      }
+
+      const double xlo = std::max(xb_edges.front(), xBmin);
+      const double xhi = std::min(xb_edges.back(), xBmax);
+      if (xlo > xhi) continue;
+      const double q_edges_to_draw[2] = {qlo, qhi};
+      for (double q : q_edges_to_draw) {
+        if (q < Q2min || q > Q2max) continue;
+        TLine* line = new TLine(xlo, q, xhi, q);
+        line->SetLineStyle(lineStyle);
+        line->SetLineWidth(lineWidth);
+        line->SetLineColor(lineColor);
+        line->Draw("SAME");
+      }
+    }
+  }
+
+  void DrawVerticalBinLines(const std::vector<double>& edges,
+                            double xmin, double xmax,
+                            double ymin, double ymax,
+                            int lineStyle=1, int lineWidth=1,
+                            int lineColor=kRed) {
+    for (double x : edges) {
+      if (x < xmin || x > xmax) continue;
+      TLine* line = new TLine(x, ymin, x, ymax);
+      line->SetLineStyle(lineStyle);
+      line->SetLineWidth(lineWidth);
+      line->SetLineColor(lineColor);
+      line->Draw("SAME");
+    }
+  }
+
 
   void PlotDVCSKinematicsComparison(bool plotIndividual = false) {
     // Store current global TGaxis state
@@ -1644,9 +1709,12 @@ class DISANAcomparer {
 
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF();
-    double xBmin = 0.1, xBmax = 0.6;
-    double Q2min = 1.0, Q2max = 5.0;
-    double tmin = 0.0, tmax = 1.0;
+    const auto xB_lines = GetAllConfiguredXBEdges();
+    const auto& Q2_lines = fXbins.GetQ2Bins();
+    const auto& t_lines = fXbins.GetTBins();
+    double xBmin = 0.05, xBmax = 0.7;
+    double Q2min = 0.5, Q2max = 7.0;
+    double tmin = 0.0, tmax = 2.0;
     auto h2d = rdf.Histo2D({"h_Q2_vs_xB", "Q^{2} vs x_{B};x_{B};Q^{2} [GeV^{2}]", 500, xBmin, xBmax, 500, Q2min, Q2max}, "xB", "Q2");
 
     styleDVCS_.StylePad((TPad*)gPad);
@@ -1670,14 +1738,9 @@ class DISANAcomparer {
     h2d->GetZaxis()->SetLabelSize(0.06);
     h2d->GetZaxis()->SetTitleOffset(1.5);
     h2d->GetZaxis()->SetTitleSize(0.06);
-    //std::vector<double> xB_lines = {0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430};
-    //std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90};
-    std::vector<double> xB_lines = {0.125, 0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.43};
-    std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90, 3.50};
-    std::vector<double> t_lines = {0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0};
     TGaxis::SetMaxDigits(3);
     h2d->DrawCopy("COLZ");
-    DrawCustomGrid(xB_lines, Q2_lines, xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
+    DrawConfiguredXBQ2Grid(xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(2);
@@ -1704,7 +1767,7 @@ class DISANAcomparer {
     h2d2->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d2->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, Q2_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(3);
@@ -1731,7 +1794,7 @@ class DISANAcomparer {
     h2d3->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d3->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, xB_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
     gPad->RedrawAxis();
     // Final save and cleanup
     canvas->SaveAs((outputDir + "/xBQ2tBin.pdf").c_str());
@@ -1752,9 +1815,12 @@ class DISANAcomparer {
 
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF_DVCSMC();
-    double xBmin = 0.1, xBmax = 0.6;
-    double Q2min = 1.0, Q2max = 5.0;
-    double tmin = 0.0, tmax = 1.0;
+    const auto xB_lines = GetAllConfiguredXBEdges();
+    const auto& Q2_lines = fXbins.GetQ2Bins();
+    const auto& t_lines = fXbins.GetTBins();
+    double xBmin = 0.05, xBmax = 0.7;
+    double Q2min = 0.5, Q2max = 7.0;
+    double tmin = 0.0, tmax = 2.0;
     auto h2d = rdf.Histo2D({"h_Q2_vs_xB", "Q^{2} vs x_{B};x_{B};Q^{2} [GeV^{2}]", 500, xBmin, xBmax, 500, Q2min, Q2max}, "xB", "Q2");
 
     styleDVCS_.StylePad((TPad*)gPad);
@@ -1778,14 +1844,9 @@ class DISANAcomparer {
     h2d->GetZaxis()->SetLabelSize(0.06);
     h2d->GetZaxis()->SetTitleOffset(1.5);
     h2d->GetZaxis()->SetTitleSize(0.06);
-    //std::vector<double> xB_lines = {0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430};
-    //std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90};
-    std::vector<double> xB_lines = {0.125, 0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.43};
-    std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90, 3.50};
-    std::vector<double> t_lines = {0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0};
     TGaxis::SetMaxDigits(3);
     h2d->DrawCopy("COLZ");
-    DrawCustomGrid(xB_lines, Q2_lines, xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
+    DrawConfiguredXBQ2Grid(xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(2);
@@ -1812,7 +1873,7 @@ class DISANAcomparer {
     h2d2->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d2->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, Q2_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(3);
@@ -1839,7 +1900,7 @@ class DISANAcomparer {
     h2d3->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d3->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, xB_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
     gPad->RedrawAxis();
     // Final save and cleanup
     canvas->SaveAs((outputDir + "/xBQ2tBinMC.pdf").c_str());
@@ -1860,9 +1921,12 @@ class DISANAcomparer {
 
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF_Pi0Data();
-    double xBmin = 0.1, xBmax = 0.6;
-    double Q2min = 1.0, Q2max = 5.0;
-    double tmin = 0.0, tmax = 1.0;
+    const auto xB_lines = GetAllConfiguredXBEdges();
+    const auto& Q2_lines = fXbins.GetQ2Bins();
+    const auto& t_lines = fXbins.GetTBins();
+    double xBmin = 0.05, xBmax = 0.7;
+    double Q2min = 0.5, Q2max = 7.0;
+    double tmin = 0.0, tmax = 2.0;
     auto h2d = rdf.Histo2D({"h_Q2_vs_xB", "Q^{2} vs x_{B};x_{B};Q^{2} [GeV^{2}]", 500, xBmin, xBmax, 500, Q2min, Q2max}, "xB", "Q2");
 
     styleDVCS_.StylePad((TPad*)gPad);
@@ -1886,14 +1950,9 @@ class DISANAcomparer {
     h2d->GetZaxis()->SetLabelSize(0.06);
     h2d->GetZaxis()->SetTitleOffset(1.5);
     h2d->GetZaxis()->SetTitleSize(0.06);
-    //std::vector<double> xB_lines = {0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430};
-    //std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90};
-    std::vector<double> xB_lines = {0.125, 0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.43};
-    std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90, 3.50};
-    std::vector<double> t_lines = {0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0};
     TGaxis::SetMaxDigits(3);
     h2d->DrawCopy("COLZ");
-    DrawCustomGrid(xB_lines, Q2_lines, xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
+    DrawConfiguredXBQ2Grid(xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(2);
@@ -1920,7 +1979,7 @@ class DISANAcomparer {
     h2d2->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d2->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, Q2_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(3);
@@ -1947,7 +2006,7 @@ class DISANAcomparer {
     h2d3->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d3->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, xB_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
     gPad->RedrawAxis();
     // Final save and cleanup
     canvas->SaveAs((outputDir + "/xBQ2tBinPi0.pdf").c_str());
@@ -1969,9 +2028,12 @@ class DISANAcomparer {
 
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF_Pi0MC();
-    double xBmin = 0.1, xBmax = 0.6;
-    double Q2min = 1.0, Q2max = 5.0;
-    double tmin = 0.0, tmax = 1.0;
+    const auto xB_lines = GetAllConfiguredXBEdges();
+    const auto& Q2_lines = fXbins.GetQ2Bins();
+    const auto& t_lines = fXbins.GetTBins();
+    double xBmin = 0.05, xBmax = 0.7;
+    double Q2min = 0.5, Q2max = 7.0;
+    double tmin = 0.0, tmax = 2.0;
     auto h2d = rdf.Histo2D({"h_Q2_vs_xB", "Q^{2} vs x_{B};x_{B};Q^{2} [GeV^{2}]", 500, xBmin, xBmax, 500, Q2min, Q2max}, "xB", "Q2");
 
     styleDVCS_.StylePad((TPad*)gPad);
@@ -1995,14 +2057,9 @@ class DISANAcomparer {
     h2d->GetZaxis()->SetLabelSize(0.06);
     h2d->GetZaxis()->SetTitleOffset(1.5);
     h2d->GetZaxis()->SetTitleSize(0.06);
-    //std::vector<double> xB_lines = {0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430};
-    //std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90};
-    std::vector<double> xB_lines = {0.125, 0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.43};
-    std::vector<double> Q2_lines = {1.00, 1.25, 1.50, 1.75, 2.00, 2.40, 2.90, 3.50};
-    std::vector<double> t_lines = {0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0};
     TGaxis::SetMaxDigits(3);
     h2d->DrawCopy("COLZ");
-    DrawCustomGrid(xB_lines, Q2_lines, xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
+    DrawConfiguredXBQ2Grid(xBmin, xBmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(2);
@@ -2029,7 +2086,7 @@ class DISANAcomparer {
     h2d2->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d2->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, Q2_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, Q2min, Q2max, 1, 1, kRed);
     gPad->RedrawAxis();
 
     canvas->cd(3);
@@ -2056,7 +2113,7 @@ class DISANAcomparer {
     h2d3->GetZaxis()->SetTitleSize(0.06);
     TGaxis::SetMaxDigits(3);
     h2d3->DrawCopy("COLZ");
-    DrawCustomGrid(t_lines, xB_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
+    DrawVerticalBinLines(t_lines, tmin, tmax, xBmin, xBmax, 1, 1, kRed);
     gPad->RedrawAxis();
     // Final save and cleanup
     canvas->SaveAs((outputDir + "/xBQ2tBinPi0MC.pdf").c_str());
@@ -2679,6 +2736,7 @@ class DISANAcomparer {
       double phi   = h->GetBinCenter(ibin);
       double value = h->GetBinContent(ibin);
       double err   = h->GetBinError(ibin);
+      if (!std::isfinite(value) || !std::isfinite(err)) continue;
 
       fout << xB << "\t"
            << Q2 << "\t"
@@ -2711,11 +2769,10 @@ class DISANAcomparer {
     }
     const auto& q2_edges = fXbins.GetQ2Bins();
     const auto& t_edges = fXbins.GetTBins();
-    const auto& xb_edges = fXbins.GetXBBins();
 
     const size_t n_q2 = q2_edges.size() - 1;
     const size_t n_t = t_edges.size() - 1;
-    const size_t n_xb = xb_edges.size() - 1;
+    const size_t n_xb = fXbins.GetMaxXBBinCount();
 
     const int rows = n_q2;
     const int cols = n_xb;
@@ -2739,10 +2796,11 @@ class DISANAcomparer {
       double cellW = (1 - 2 * canvasBorderX) / cols, cellH = (1 - 2 * canvasBorderY) / rows;
 
       for (size_t q2_bin = 0; q2_bin < n_q2; ++q2_bin) {
+        const auto& xb_edges = fXbins.GetXBBins(q2_bin);
         first_perbin_q2 = true;
 
         /// xbin loop
-        for (size_t xb_bin = 0; xb_bin < n_xb; ++xb_bin) {
+        for (size_t xb_bin = 0; xb_bin + 1 < xb_edges.size(); ++xb_bin) {
           int visualRow = rows - 1 - q2_bin;
           int pad = visualRow * cols + xb_bin + 1;
           c->cd();
@@ -2778,6 +2836,7 @@ class DISANAcomparer {
             // const int idx = q2_bin * (n_t * n_xb) + t_bin * n_xb + xb_bin;
 
             TH1D* h = histograms[m][xb_bin][q2_bin][t_bin];
+            if (!h) continue;
 
             styleBSA_.StyleTH1(h);
 

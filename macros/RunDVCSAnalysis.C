@@ -18,15 +18,20 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   } else {
     std::cout << "[RunDVCSAnalysis] IMT disabled (single thread mode).\n";
   }
-  bool IsMC = false;              // Set to true if you want to run on MC data
+  bool IsMC = true;              // Set to true if you want to run on MC data
   bool IsreprocRootFile = false;  // Set to true if you want to reprocess ROOT files
   bool IsInbending = true;        // Set to true if you want to run on inbending data
   bool IsMinimalBook = true;
   bool OutputWCSV = false;        // Set to true to write final corrected W/electron CSV only, with no ROOT output
+  bool FiducalSystematics = false;  // Set to true if you want to run systematic variations for fiducial cuts
+  bool PIDSystematics = false;  // Set to true if you want to run systematic variations for PID cuts
+  bool ElectronMomentumSystematics = false;  // Set to true if you want to run systematic variations for electron momentum corrections
+  float SFthreeSigmaFactor = 5.0/6.0;
+  float ElectronMomentumScaleFactor = 0.9;  // Set to 1.0 for nominal, >1.0 for up variation, <1.0 for down variation
   //std::string dataconfig = "rgasp18_inb";
   //std::string dataconfig = "rgasp18_outb";
-  std::string dataconfig = "rgkfa18_7546";
-  //std::string dataconfig = "rgkfa18_6535";
+  //std::string dataconfig = "rgkfa18_7546";
+  std::string dataconfig = "rgkfa18_6535";
   //std::string dataconfig = "rgksp24_8477";
   //std::string dataconfig = "rgksp24_6395";
 
@@ -111,10 +116,11 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   auto edge_regions_e = std::vector<float>{3.0f, 3.0f, 10.0f};
   auto edge_regions_p = std::vector<float>{3.0f, 3.0f, 5.0f};
   auto CVT_edge_layers_p = std::vector<float>{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};  // CVT edge cuts for protons
-
-  //edge_regions_e = std::vector<float>{-100.0f, -100.0f, -100.0f};  // DC edge cuts for electrons for test
-  //edge_regions_p = std::vector<float>{-100.0f, -100.0f, -100.0f};  // DC edge cuts for protons for test
-  //CVT_edge_layers_p = std::vector<float>{-100.0f, -100.0f, -100.0f, -100.0f, -100.0f};  // CVT edge cuts for test
+  if (FiducalSystematics){
+    edge_regions_e = std::vector<float>{4.0f, 4.0f, 11.0f};  // DC edge cuts for electrons for systematic variation
+    edge_regions_p = std::vector<float>{4.0f, 4.0f, 6.0f};  // DC edge cuts for protons for systematic variation
+    CVT_edge_layers_p = std::vector<float>{0.1f, 0.1f, 0.1f, 0.1f, 0.1f};  // CVT edge cuts for protons for systematic variation
+  }
 
   trackCuts->SetDCEdgeCuts(11, edge_regions_e);        // DC edge cuts for electrons
   trackCuts->SetDCEdgeCuts(2212, edge_regions_p);      // DC edge cuts for protons
@@ -154,34 +160,63 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   trackCuts->AddFTCalFiducialRange(11, 1, -6.15, -13.00, 0.0, 2.3);  // Electron FTCal fiducial cuts
   trackCuts->AddFTCalFiducialRange(11, 1, 3.7, -6.5, 0.0, 2.0);      // Electron FTCal fiducial cuts
 
-  // Cal fiducial edge cuts for electron and photon,
-  trackCuts->AddPCalFiducialRange(11, 1, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 1, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 2, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 2, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 3, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 3, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 4, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 4, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 5, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 5, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 6, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(11, 6, "lv", 0.0, 13.5);
-  /// check the edge cut for photon is different its loose in RGA analysis note!
-  trackCuts->AddPCalFiducialRange(22, 1, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 1, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 2, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 2, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 3, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 3, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 4, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 4, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 5, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 5, "lv", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 6, "lw", 0.0, 13.5);
-  trackCuts->AddPCalFiducialRange(22, 6, "lv", 0.0, 13.5);
-  // End of edge fiducial cuts
-
+  if (!FiducalSystematics){
+    // Cal fiducial edge cuts for electron and photon,
+    trackCuts->AddPCalFiducialRange(11, 1, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 1, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 2, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 2, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 3, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 3, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 4, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 4, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 5, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 5, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 6, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(11, 6, "lv", 0.0, 13.5);
+    /// check the edge cut for photon is different its loose in RGA analysis note!
+    trackCuts->AddPCalFiducialRange(22, 1, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 1, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 2, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 2, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 3, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 3, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 4, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 4, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 5, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 5, "lv", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 6, "lw", 0.0, 13.5);
+    trackCuts->AddPCalFiducialRange(22, 6, "lv", 0.0, 13.5);
+    std::cout << "Applied standard PCal fiducial cuts (0.0 to 13.5) for electrons and photons in all sectors.\n";
+    // End of edge fiducial cuts
+  } else {
+    trackCuts->AddPCalFiducialRange(11, 1, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 1, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 2, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 2, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 3, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 3, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 4, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 4, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 5, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 5, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 6, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(11, 6, "lv", 0.0, 14.5);
+    
+    trackCuts->AddPCalFiducialRange(22, 1, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 1, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 2, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 2, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 3, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 3, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 4, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 4, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 5, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 5, "lv", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 6, "lw", 0.0, 14.5);
+    trackCuts->AddPCalFiducialRange(22, 6, "lv", 0.0, 14.5);
+    std::cout << "Applied systematic variation PCal fiducial cuts (0.0 to 14.5) for electrons and photons in all sectors.\n";
+  }
 
   if (dataconfig == "rgasp18_inb" || dataconfig == "rgasp18_outb" || dataconfig == "rgkfa18_7546" || dataconfig == "rgkfa18_6535") {
     // Cal fiducial cuts for eletron,
@@ -244,11 +279,22 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
     trackCuts->AddECinFiducialRange(22, 1, "lv", 67.5, 94.5);
   }
 
-  /// set sampling fraction for the particle in detector
-  trackCuts->SetMinECALEnergyCut(11, 1, 0.06);  // Electron PCal layer 1
-  // apply sampling fraction and diagolal cuts tbd!!
-  trackCuts->SetSFCut(true, 11, 0.19, 4.9);  // Set to true if you want to apply sampling fraction cut
-
+  if (!PIDSystematics){
+    /// set sampling fraction for the particle in detector
+    trackCuts->SetMinECALEnergyCut(11, 1, 0.06);  // Electron PCal layer 1
+    // apply sampling fraction and diagolal cuts tbd!!
+    trackCuts->SetSFCut(true, 11, 0.19, 4.9);  // Set to true if you want to apply sampling fraction cut
+    std::cout << "Applied standard sampling fraction cut for electrons in PCal layer 1 with min energy cut of 0.06 and SF cut of 0.19.\n";
+  } else {
+    trackCuts->SetMinECALEnergyCut(11, 1, 0.06);  // Electron PCal layer 1
+    trackCuts->SetSFCut(true, 11, 0.21, 4.9);  // Set to true if you want to apply sampling fraction cut
+    std::cout << "Applied systematic variation sampling fraction cut for electrons in PCal layer 1 with min energy cut of 0.06 and SF cut of 0.21.\n";
+  }
+  trackCuts->SetSamplingFractionSystematics(PIDSystematics, SFthreeSigmaFactor);
+  if (PIDSystematics) {
+    std::cout << "Sampling-fraction min/max curves rescaled around their midpoint "
+              << "with SFthreeSigmaFactor = " << SFthreeSigmaFactor << ".\n";
+  }
   // rga sp18 in
   if (dataconfig == "rgasp18_inb") {
     trackCuts->AddSamplingFractionMinCut(11, 1, 0.160145, 0.0121428, -0.00130927);    // Electronsector 1
@@ -418,6 +464,10 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
   auto addElectronWCorrection = [&](const double a0[7][3], const double a1[7][3],
                                   const char* tag) {
     std::cout << "Applying electron W correction: " << tag << std::endl;
+    if (ElectronMomentumSystematics) {
+      std::cout << "Applying systematic variation to electron momentum correction "
+                << "with scale factor: " << ElectronMomentumScaleFactor << std::endl;
+    }
 
     corr->AddPiecewiseCorrection(
         11,
@@ -450,6 +500,9 @@ void RunDVCSAnalysis(const std::string& inputDir, int nfile, int nthreads = 0) {
           const double a1Theta = a1[sector][0] + a1[sector][1] * thetaDeg + a1[sector][2] * thetaDeg * thetaDeg;
 
           const double deltaP = a0Theta + a1Theta * phiAxisDeg;
+          if (ElectronMomentumSystematics){
+            return p + deltaP * ElectronMomentumScaleFactor;
+          }
           return p + deltaP;
         });
   };

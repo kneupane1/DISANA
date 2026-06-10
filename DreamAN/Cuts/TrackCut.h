@@ -157,6 +157,10 @@ void SetMinECALEnergyCut(int pid, int layer, float minEnergy);
 
 void AddSamplingFractionMinCut(int pid, int sector, float A0, float Bm1, float Cm2);
 void AddSamplingFractionMaxCut(int pid, int sector, float A0, float Bm1, float Cm2);
+void SetSamplingFractionSystematics(bool enabled, float threeSigmaFactor) {
+  fPIDSystematics = enabled;
+  fSFthreeSigmaFactor = threeSigmaFactor;
+}
 
 
 
@@ -170,6 +174,8 @@ void AddSamplingFractionMaxCut(int pid, int sector, float A0, float Bm1, float C
   int fSFpid = 11;  // Default PID for SF cut
   float fSFmin = 0.0;  // Default minimum SF value
   float fSFminP = 100.0;  // Default minimum SF value for positive particles
+  bool fPIDSystematics = false;
+  float fSFthreeSigmaFactor = 1.0f;
 
   struct FiducialAxisCut {
     std::vector<std::pair<float, float>> excludedRanges;

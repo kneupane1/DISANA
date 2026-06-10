@@ -23,6 +23,8 @@ TrackCut::TrackCut(const TrackCut& other) {
   this->fSFpid = other.fSFpid;
   this->fSFmin = other.fSFmin;
   this->fSFminP = other.fSFminP;
+  this->fPIDSystematics = other.fPIDSystematics;
+  this->fSFthreeSigmaFactor = other.fSFthreeSigmaFactor;
 
   this->fSFCutsMinCut = other.fSFCutsMinCut;
   this->fSFCutsMaxCut = other.fSFCutsMaxCut;
@@ -383,6 +385,20 @@ TrackCut::RECCalorimeterPass() const {
         if (sectorMap.count(REC_Particle_Sector[i])) {
           const auto& abc = sectorMap.at(REC_Particle_Sector[i]);
           float minCut = abc.A0 + abc.Bm1 * p[i] + abc.Cm2 * (p[i] * p[i]);
+          if (fPIDSystematics) {
+            auto maxPidIt = fSFCutsMaxCut.find(cur_pid);
+            if (maxPidIt != fSFCutsMaxCut.end()) {
+              auto maxSectorIt = maxPidIt->second.find(REC_Particle_Sector[i]);
+              if (maxSectorIt != maxPidIt->second.end()) {
+                const auto& maxABC = maxSectorIt->second;
+                const float maxCut =
+                    maxABC.A0 + maxABC.Bm1 * p[i] + maxABC.Cm2 * (p[i] * p[i]);
+                const float center = 0.5f * (minCut + maxCut);
+                const float halfWidth = 0.5f * (maxCut - minCut);
+                minCut = center - halfWidth * fSFthreeSigmaFactor;
+              }
+            }
+          }
           if (SF[i] < minCut) {
             return_values[i] = 0;
           }
@@ -396,6 +412,20 @@ TrackCut::RECCalorimeterPass() const {
         if (sectorMap.count(REC_Particle_Sector[i])) {
           const auto& abc = sectorMap.at(REC_Particle_Sector[i]);
           float maxCut = abc.A0 + abc.Bm1 * p[i] + abc.Cm2 * (p[i] * p[i]);
+          if (fPIDSystematics) {
+            auto minPidIt = fSFCutsMinCut.find(cur_pid);
+            if (minPidIt != fSFCutsMinCut.end()) {
+              auto minSectorIt = minPidIt->second.find(REC_Particle_Sector[i]);
+              if (minSectorIt != minPidIt->second.end()) {
+                const auto& minABC = minSectorIt->second;
+                const float minCut =
+                    minABC.A0 + minABC.Bm1 * p[i] + minABC.Cm2 * (p[i] * p[i]);
+                const float center = 0.5f * (minCut + maxCut);
+                const float halfWidth = 0.5f * (maxCut - minCut);
+                maxCut = center + halfWidth * fSFthreeSigmaFactor;
+              }
+            }
+          }
           if (SF[i] > maxCut) {
             return_values[i] = 0;
           }

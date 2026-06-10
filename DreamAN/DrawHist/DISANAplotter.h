@@ -795,8 +795,23 @@ class DISANAplotter {
             const double xs_err = hXS->GetBinError(b);
             const double pi0_val = hPi0XS ? hPi0XS->GetBinContent(b) : 0.0;
             const double pi0_err = hPi0XS ? hPi0XS->GetBinError(b) : 0.0;
-            const double c_val = hCorr ? hCorr->GetBinContent(b) : 0.0;
-            const double c_err = hCorr ? hCorr->GetBinError(b) : 0.0;
+            const double c_val =
+                hCorr ? hCorr->GetBinContent(b)
+                      : std::numeric_limits<double>::quiet_NaN();
+            const double c_err =
+                hCorr ? hCorr->GetBinError(b)
+                      : std::numeric_limits<double>::quiet_NaN();
+
+            const bool has_pi0_correction =
+                std::isfinite(c_val) && std::isfinite(c_err)
+                && c_val > 0.0 && std::abs(1.0 - c_val) > 1e-12;
+            if (!has_pi0_correction) {
+              const double invalid =
+                  std::numeric_limits<double>::quiet_NaN();
+              hNew->SetBinContent(b, invalid);
+              hNew->SetBinError(b, invalid);
+              continue;
+            }
 
             const double val_corr = xs_val / (1.0 - c_val) - (pi0_val * c_val / (1.0 - c_val));
             const double err_corr = std::sqrt(std::pow(xs_err * (1.0 - c_val), 2) + std::pow(xs_val * c_err, 2));
