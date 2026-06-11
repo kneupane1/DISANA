@@ -10,6 +10,7 @@
 #include <TLine.h>
 #include <TVector3.h>
 #include <TVirtualFitter.h>
+#include <ROOT/RDFHelpers.hxx>
 #include <sys/stat.h>
 // STL headers
 #include <algorithm>
@@ -2210,7 +2211,8 @@ class DISANAcomparer {
   };
 
   void PlotExclusivityComparisonByDetectorCaseswithPi0(
-      const std::vector<std::pair<std::string, std::string>>& detectorCuts) {
+      const std::vector<std::pair<std::string, std::string>>& detectorCuts,
+      const std::vector<double>& tbin) {
     std::vector<std::tuple<std::string, std::string, std::string, double, double>> vars = {
         {"Mx2_ep", "Missing Mass Squared (ep)", "MM^{2}(ep) [GeV^{2}]", -0.6, 0.6},
         {"Emiss", "Missing Energy", "E_{miss} [GeV]", -1.0, 2.0},
@@ -2221,21 +2223,111 @@ class DISANAcomparer {
         {"Mx2_eg", "Invariant Mass (e#gamma)", "M^{2}(e#gamma) [GeV^{2}]", -0.5, 3.0},
         {"Theta_e_gamma", "Angle: e-#gamma", "#theta(e, #gamma) [deg]", 0.0, 60.0}};
 
-    for (const auto& [cutExpr, cutLabel] : detectorCuts) {
+    if (tbin.size() < 2) {
+      std::cerr << "PlotExclusivityComparisonByDetectorCaseswithPi0 requires at least two t-bin edges.\n";
+      return;
+    }
+
+    struct BookedHistograms {
+      ROOT::RDF::RResultPtr<TH1D> dvcs;
+      ROOT::RDF::RResultPtr<TH1D> pi0Data;
+      ROOT::RDF::RResultPtr<TH1D> dvcsPi0MC;
+      ROOT::RDF::RResultPtr<TH1D> pi0Pi0MC;
+    };
+    using HistogramKey = std::tuple<size_t, size_t, size_t, size_t>;
+    std::map<HistogramKey, BookedHistograms> bookedHistograms;
+    std::vector<ROOT::RDF::RResultHandle> resultHandles;
+
+    // Book all detector/t-bin branches first so each underlying data source is
+    // scanned once when RunGraphs executes the complete graph.
+    for (size_t detectorIndex = 0; detectorIndex < detectorCuts.size(); ++detectorIndex) {
+      const auto& [cutExpr, cutLabel] = detectorCuts[detectorIndex];
       std::string cleanName = cutLabel;
       std::replace(cleanName.begin(), cleanName.end(), ' ', '_');
       std::replace(cleanName.begin(), cleanName.end(), ',', '_');
 
-      TCanvas* canvas = new TCanvas(("c_DVCS_vs_Pi0Data_" + cleanName).c_str(), cutLabel.c_str(), 1800, 1200);
-      const int cols = 3;
-      const int rows = (vars.size() + cols - 1) / cols;
-      canvas->Divide(cols, rows);
+      for (size_t tbinIndex = 0; tbinIndex + 1 < tbin.size(); ++tbinIndex) {
+        const double tLow = tbin[tbinIndex];
+        const double tHigh = tbin[tbinIndex + 1];
+        if (tHigh <= tLow) continue;
 
-      for (size_t i = 0; i < vars.size(); ++i) {
-        canvas->cd(i + 1);
-        const auto& [var, title, xlabel, xmin, xmax] = vars[i];
-        gPad->SetTicks();
-        styleKin_.StylePad((TPad*)gPad);
+        const std::string tCut = Form("t >= %.12g && t < %.12g", tLow, tHigh);
+        const std::string tLabel = Form("%.3f <= t < %.3f GeV^{2}", tLow, tHigh);
+
+        for (size_t m = 0; m < plotters.size(); ++m) {
+          auto rdfDVCS = plotters[m]->GetRDF().Filter(cutExpr, cutLabel).Filter(tCut, tLabel);
+          auto rdfPi0 = plotters[m]->GetRDF_Pi0Data().Filter(cutExpr, cutLabel).Filter(tCut, tLabel);
+          auto rdfDVCSPi0MC = plotters[m]->GetRDF_DVCSSelectedPi0MC().Filter(cutExpr, cutLabel).Filter(tCut, tLabel);
+          auto rdfPi0Pi0MC = plotters[m]->GetRDF_Pi0SelectedPi0MC().Filter(cutExpr, cutLabel).Filter(tCut, tLabel);
+
+          for (size_t variableIndex = 0; variableIndex < vars.size(); ++variableIndex) {
+            const auto& [var, title, xlabel, xmin, xmax] = vars[variableIndex];
+            if (!rdfDVCS.HasColumn(var) || !rdfPi0.HasColumn(var) ||
+                !rdfDVCSPi0MC.HasColumn(var) || !rdfPi0Pi0MC.HasColumn(var)) {
+              continue;
+            }
+
+            BookedHistograms booked{
+                rdfDVCS.Histo1D(
+                    {Form("h_dvcs_%s_%s_tbin%zu_%zu", var.c_str(), cleanName.c_str(), tbinIndex, m),
+                     (title + ";" + xlabel + ";Counts / N_{DVCS}").c_str(), 100, xmin, xmax},
+                    var),
+                rdfPi0.Histo1D(
+                    {Form("h_pi0data_%s_%s_tbin%zu_%zu", var.c_str(), cleanName.c_str(), tbinIndex, m),
+                     (title + ";" + xlabel + ";Counts / N_{DVCS}").c_str(), 100, xmin, xmax},
+                    var),
+                rdfDVCSPi0MC.Histo1D(
+                    {Form("h_dvcs_pi0mc_%s_%s_tbin%zu_%zu", var.c_str(), cleanName.c_str(), tbinIndex, m),
+                     "", 100, xmin, xmax},
+                    var),
+                rdfPi0Pi0MC.Histo1D(
+                    {Form("h_pi0_pi0mc_%s_%s_tbin%zu_%zu", var.c_str(), cleanName.c_str(), tbinIndex, m),
+                     "", 100, xmin, xmax},
+                    var)};
+
+            resultHandles.emplace_back(booked.dvcs);
+            resultHandles.emplace_back(booked.pi0Data);
+            resultHandles.emplace_back(booked.dvcsPi0MC);
+            resultHandles.emplace_back(booked.pi0Pi0MC);
+            bookedHistograms.emplace(
+                HistogramKey{detectorIndex, tbinIndex, variableIndex, m},
+                std::move(booked));
+          }
+        }
+      }
+    }
+
+    unsigned int eventLoopCount = 0;
+    if (!resultHandles.empty()) eventLoopCount = ROOT::RDF::RunGraphs(resultHandles);
+    std::cout << "[PlotExclusivityComparisonByDetectorCaseswithPi0] completed "
+              << eventLoopCount << " independent RDataFrame event loop(s).\n";
+
+    for (size_t detectorIndex = 0; detectorIndex < detectorCuts.size(); ++detectorIndex) {
+      const std::string& cutLabel = detectorCuts[detectorIndex].second;
+      std::string cleanName = cutLabel;
+      std::replace(cleanName.begin(), cleanName.end(), ' ', '_');
+      std::replace(cleanName.begin(), cleanName.end(), ',', '_');
+
+      for (size_t tbinIndex = 0; tbinIndex + 1 < tbin.size(); ++tbinIndex) {
+        const double tLow = tbin[tbinIndex];
+        const double tHigh = tbin[tbinIndex + 1];
+        if (tHigh <= tLow) {
+          std::cerr << "Skipping invalid t bin [" << tLow << ", " << tHigh << ").\n";
+          continue;
+        }
+
+        const std::string tLabel = Form("%.3f <= t < %.3f GeV^{2}", tLow, tHigh);
+        const std::string canvasName = Form("c_DVCS_vs_Pi0Data_%s_tbin%zu", cleanName.c_str(), tbinIndex);
+        TCanvas* canvas = new TCanvas(canvasName.c_str(), (cutLabel + ", " + tLabel).c_str(), 1800, 1200);
+        const int cols = 3;
+        const int rows = (vars.size() + cols - 1) / cols;
+        canvas->Divide(cols, rows);
+
+        for (size_t i = 0; i < vars.size(); ++i) {
+          canvas->cd(i + 1);
+          const std::string& var = std::get<0>(vars[i]);
+          gPad->SetTicks();
+          styleKin_.StylePad((TPad*)gPad);
 
         TLegend* legend = new TLegend(0.54, 0.68, 0.88, 0.88);
         legend->SetBorderSize(0);
@@ -2247,18 +2339,12 @@ class DISANAcomparer {
         bool first = true;
 
         for (size_t m = 0; m < plotters.size(); ++m) {
-          auto rdfDVCS = plotters[m]->GetRDF().Filter(cutExpr, cutLabel);
-          auto rdfPi0 = plotters[m]->GetRDF_Pi0Data().Filter(cutExpr, cutLabel);
-          auto rdfDVCSPi0MC = plotters[m]->GetRDF_DVCSSelectedPi0MC().Filter(cutExpr, cutLabel);
-          auto rdfPi0Pi0MC = plotters[m]->GetRDF_Pi0SelectedPi0MC().Filter(cutExpr, cutLabel);
-          if (!rdfDVCS.HasColumn(var)) continue;
+          const auto bookedIt = bookedHistograms.find(
+              HistogramKey{detectorIndex, tbinIndex, i, m});
+          if (bookedIt == bookedHistograms.end()) continue;
+          auto& booked = bookedIt->second;
 
-          auto hDVCSResult = rdfDVCS.Histo1D(
-              {Form("h_dvcs_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
-               (title + ";" + xlabel + ";Counts / N_{DVCS}").c_str(), 100, xmin, xmax},
-              var);
-          hDVCSResult.GetValue();
-          TH1D* hDVCS = (TH1D*)hDVCSResult.GetPtr()->Clone();
+          TH1D* hDVCS = (TH1D*)booked.dvcs.GetPtr()->Clone();
           hDVCS->SetDirectory(0);
 
           const double dvcsIntegral = hDVCS->Integral();
@@ -2268,39 +2354,26 @@ class DISANAcomparer {
           }
 
           TH1D* hSubtracted = nullptr;
-          double pi0TransferFactor = 0.0;
-          if (rdfPi0.HasColumn(var) && rdfDVCSPi0MC.HasColumn(var) && rdfPi0Pi0MC.HasColumn(var)) {
-            auto hDVCSPi0MCResult = rdfDVCSPi0MC.Histo1D(
-                {Form("h_dvcs_pi0mc_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
-                 "", 100, xmin, xmax},
-                var);
-            auto hPi0Pi0MCResult = rdfPi0Pi0MC.Histo1D(
-                {Form("h_pi0_pi0mc_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
-                 "", 100, xmin, xmax},
-                var);
-            hDVCSPi0MCResult.GetValue();
-            hPi0Pi0MCResult.GetValue();
-            const double nDVCSPi0MC = hDVCSPi0MCResult.GetPtr()->Integral();
-            const double nPi0Pi0MC = hPi0Pi0MCResult.GetPtr()->Integral();
-            if (nPi0Pi0MC > 0.0) pi0TransferFactor = nDVCSPi0MC / nPi0Pi0MC;
+          const double nDVCSPi0MC = booked.dvcsPi0MC.GetPtr()->Integral();
+          const double nPi0Pi0MC = booked.pi0Pi0MC.GetPtr()->Integral();
+          const double pi0TransferFactor =
+              nPi0Pi0MC > 0.0 ? nDVCSPi0MC / nPi0Pi0MC : 0.0;
 
-            auto hPi0Result = rdfPi0.Histo1D(
-                {Form("h_pi0data_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
-                 (title + ";" + xlabel + ";Counts / N_{DVCS}").c_str(), 100, xmin, xmax},
-                var);
-            hPi0Result.GetValue();
-            TH1D* hPi0Contamination = (TH1D*)hPi0Result.GetPtr()->Clone();
-            hPi0Contamination->SetDirectory(0);
-            hPi0Contamination->Scale(pi0TransferFactor);
+          TH1D* hPi0Contamination = (TH1D*)booked.pi0Data.GetPtr()->Clone();
+          hPi0Contamination->SetDirectory(0);
+          hPi0Contamination->Scale(pi0TransferFactor);
 
-            hSubtracted = (TH1D*)hDVCS->Clone(Form("h_pi0_subtracted_%s_%s_%zu", var.c_str(), cleanName.c_str(), m));
-            hSubtracted->SetDirectory(0);
-            hSubtracted->Add(hPi0Contamination, -1.0);
-            for (int bin = 0; bin <= hSubtracted->GetNbinsX() + 1; ++bin) {
-              if (hSubtracted->GetBinContent(bin) < 0.0) hSubtracted->SetBinContent(bin, 0.0);
+          hSubtracted = (TH1D*)hDVCS->Clone(
+              Form("h_pi0_subtracted_%s_%s_tbin%zu_%zu",
+                   var.c_str(), cleanName.c_str(), tbinIndex, m));
+          hSubtracted->SetDirectory(0);
+          hSubtracted->Add(hPi0Contamination, -1.0);
+          for (int bin = 0; bin <= hSubtracted->GetNbinsX() + 1; ++bin) {
+            if (hSubtracted->GetBinContent(bin) < 0.0) {
+              hSubtracted->SetBinContent(bin, 0.0);
             }
-            delete hPi0Contamination;
           }
+          delete hPi0Contamination;
 
           hDVCS->Scale(1.0 / dvcsIntegral);
           styleKin_.StyleTH1(hDVCS);
@@ -2331,16 +2404,18 @@ class DISANAcomparer {
           if (hSubtracted) legend->AddEntry(hSubtracted, (labels[m] + " Pi0 Subtracted").c_str(), "l");
         }
 
-        if (frameHistogram) frameHistogram->SetMaximum(maxY * 1.2);
-        legend->Draw();
-        gPad->Modified();
-        gPad->Update();
-      }
+          if (frameHistogram) frameHistogram->SetMaximum(maxY * 1.2);
+          legend->Draw();
+          gPad->Modified();
+          gPad->Update();
+        }
 
-      std::string outpath = outputDir + "/Exclusivity_DVCS_vs_Pi0Data_" + cleanName + ".pdf";
-      canvas->SaveAs(outpath.c_str());
-      std::cout << "Saved DVCS vs Pi0 data exclusivity comparison to: " << outpath << "\n";
-      delete canvas;
+        std::string outpath = outputDir + Form("/Exclusivity_DVCS_vs_Pi0Data_%s_tbin%zu_%.3f_%.3f.pdf",
+                                               cleanName.c_str(), tbinIndex, tLow, tHigh);
+        canvas->SaveAs(outpath.c_str());
+        std::cout << "Saved DVCS vs Pi0 data exclusivity comparison to: " << outpath << "\n";
+        delete canvas;
+      }
     }
   }
 

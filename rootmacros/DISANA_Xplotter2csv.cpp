@@ -660,7 +660,8 @@ void DISANA_Xplotter2csv() {
   //comparer.PlotDIS_Pi0CorrComparison();
   //comparer.PlotMomentumCorrection();
   //comparer.PlotExclusivityComparisonByDetectorCases(detCuts);
-  comparer.PlotExclusivityComparisonByDetectorCaseswithPi0(detCuts);
+  std::vector<double> tbin = {0.13, 0.23, 0.43, 1.0, 2.0};
+  comparer.PlotExclusivityComparisonByDetectorCaseswithPi0(detCuts, tbin);
   bool draw_dvpi0_mc = true;
   bool output_wide_mpi0 = false;
   //comparer.PlotPi0ExclusivityComparisonByDetectorCases(detCutsPi0, draw_dvpi0_mc, output_wide_mpi0);
