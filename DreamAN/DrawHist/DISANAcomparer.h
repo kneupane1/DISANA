@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 // STL headers
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -881,6 +882,63 @@ class DISANAcomparer {
 
   std::vector<std::vector<std::vector<std::tuple<double, double, double>>>>
   getMeanQ2xBt(const BinManager& bins, std::unique_ptr<DISANAplotter>& plotter) {
+    if (bins.HasCustomBins()) {
+      struct Accumulator {
+        double sum_xB = 0.0;
+        double sum_Q2 = 0.0;
+        double sum_t = 0.0;
+        unsigned long long count = 0;
+      };
+
+      const auto& customBins = bins.GetCustomBins();
+      auto rdf = plotter->GetRDF();
+      const unsigned int nSlots = rdf.GetNSlots();
+      std::vector<std::vector<Accumulator>> slotAccumulators(
+          nSlots, std::vector<Accumulator>(customBins.size()));
+
+      rdf.ForeachSlot(
+          [&slotAccumulators, customBins](unsigned int slot, double xB, double Q2, double t) {
+            for (size_t ib = 0; ib < customBins.size(); ++ib) {
+              const auto& bin = customBins[ib];
+              if (xB >= bin.xBMin && xB < bin.xBMax &&
+                  Q2 >= bin.Q2Min && Q2 < bin.Q2Max &&
+                  t >= bin.tMin && t < bin.tMax) {
+                auto& acc = slotAccumulators[slot][ib];
+                acc.sum_xB += xB;
+                acc.sum_Q2 += Q2;
+                acc.sum_t += t;
+                ++acc.count;
+              }
+            }
+          },
+          {"xB", "Q2", "t"});
+
+      std::vector<std::vector<std::vector<std::tuple<double, double, double>>>> result(
+          1,
+          std::vector<std::vector<std::tuple<double, double, double>>>(
+              customBins.size(),
+              std::vector<std::tuple<double, double, double>>(
+                  1, std::make_tuple(0.0, 0.0, 0.0))));
+
+      for (size_t ib = 0; ib < customBins.size(); ++ib) {
+        Accumulator total;
+        for (unsigned int slot = 0; slot < nSlots; ++slot) {
+          const auto& acc = slotAccumulators[slot][ib];
+          total.sum_xB += acc.sum_xB;
+          total.sum_Q2 += acc.sum_Q2;
+          total.sum_t += acc.sum_t;
+          total.count += acc.count;
+        }
+        if (total.count > 0) {
+          result[0][ib][0] = std::make_tuple(
+              total.sum_xB / total.count,
+              total.sum_Q2 / total.count,
+              total.sum_t / total.count);
+        }
+      }
+      return result;
+    }
+
     const auto& q2_bins = bins.GetQ2Bins();
     const auto& t_bins  = bins.GetTBins();
   
@@ -1433,6 +1491,15 @@ class DISANAcomparer {
 
   std::vector<double> GetAllConfiguredXBEdges() const {
     std::vector<double> edges;
+    if (fXbins.HasCustomBins()) {
+      for (const auto& bin : fXbins.GetCustomBins()) {
+        edges.push_back(bin.xBMin);
+        edges.push_back(bin.xBMax);
+      }
+      std::sort(edges.begin(), edges.end());
+      edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+      return edges;
+    }
     const auto& q2_edges = fXbins.GetQ2Bins();
     for (size_t iq = 0; iq + 1 < q2_edges.size(); ++iq) {
       const auto& row_edges = fXbins.GetXBBins(iq);
@@ -1443,10 +1510,56 @@ class DISANAcomparer {
     return edges;
   }
 
+  std::vector<double> GetAllConfiguredQ2Edges() const {
+    if (!fXbins.HasCustomBins()) return fXbins.GetQ2Bins();
+    std::vector<double> edges;
+    for (const auto& bin : fXbins.GetCustomBins()) {
+      edges.push_back(bin.Q2Min);
+      edges.push_back(bin.Q2Max);
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    return edges;
+  }
+
+  std::vector<double> GetAllConfiguredTEdges() const {
+    if (!fXbins.HasCustomBins()) return fXbins.GetTBins();
+    std::vector<double> edges;
+    for (const auto& bin : fXbins.GetCustomBins()) {
+      edges.push_back(bin.tMin);
+      edges.push_back(bin.tMax);
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    return edges;
+  }
+
   void DrawConfiguredXBQ2Grid(double xBmin, double xBmax,
                               double Q2min, double Q2max,
                               int lineStyle=2, int lineWidth=1,
                               int lineColor=kRed) {
+    if (fXbins.HasCustomBins()) {
+      for (const auto& bin : fXbins.GetCustomBins()) {
+        const double xlo = std::max(bin.xBMin, xBmin);
+        const double xhi = std::min(bin.xBMax, xBmax);
+        const double ylo = std::max(bin.Q2Min, Q2min);
+        const double yhi = std::min(bin.Q2Max, Q2max);
+        if (xlo >= xhi || ylo >= yhi) continue;
+        for (const auto& segment : {
+                 std::array<double, 4>{xlo, ylo, xhi, ylo},
+                 std::array<double, 4>{xhi, ylo, xhi, yhi},
+                 std::array<double, 4>{xhi, yhi, xlo, yhi},
+                 std::array<double, 4>{xlo, yhi, xlo, ylo}}) {
+          TLine* line = new TLine(segment[0], segment[1], segment[2], segment[3]);
+          line->SetLineStyle(lineStyle);
+          line->SetLineWidth(lineWidth);
+          line->SetLineColor(lineColor);
+          line->Draw("SAME");
+        }
+      }
+      return;
+    }
+
     const auto& q2_edges = fXbins.GetQ2Bins();
     for (size_t iq = 0; iq + 1 < q2_edges.size(); ++iq) {
       const double qlo = q2_edges[iq];
@@ -1711,8 +1824,8 @@ class DISANAcomparer {
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF();
     const auto xB_lines = GetAllConfiguredXBEdges();
-    const auto& Q2_lines = fXbins.GetQ2Bins();
-    const auto& t_lines = fXbins.GetTBins();
+    const auto Q2_lines = GetAllConfiguredQ2Edges();
+    const auto t_lines = GetAllConfiguredTEdges();
     double xBmin = 0.05, xBmax = 0.7;
     double Q2min = 0.5, Q2max = 7.0;
     double tmin = 0.0, tmax = 2.0;
@@ -1817,8 +1930,8 @@ class DISANAcomparer {
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF_DVCSMC();
     const auto xB_lines = GetAllConfiguredXBEdges();
-    const auto& Q2_lines = fXbins.GetQ2Bins();
-    const auto& t_lines = fXbins.GetTBins();
+    const auto Q2_lines = GetAllConfiguredQ2Edges();
+    const auto t_lines = GetAllConfiguredTEdges();
     double xBmin = 0.05, xBmax = 0.7;
     double Q2min = 0.5, Q2max = 7.0;
     double tmin = 0.0, tmax = 2.0;
@@ -1923,8 +2036,8 @@ class DISANAcomparer {
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF_Pi0Data();
     const auto xB_lines = GetAllConfiguredXBEdges();
-    const auto& Q2_lines = fXbins.GetQ2Bins();
-    const auto& t_lines = fXbins.GetTBins();
+    const auto Q2_lines = GetAllConfiguredQ2Edges();
+    const auto t_lines = GetAllConfiguredTEdges();
     double xBmin = 0.05, xBmax = 0.7;
     double Q2min = 0.5, Q2max = 7.0;
     double tmin = 0.0, tmax = 2.0;
@@ -2030,8 +2143,8 @@ class DISANAcomparer {
     canvas->cd(1);
     auto rdf = plotters.front()->GetRDF_Pi0MC();
     const auto xB_lines = GetAllConfiguredXBEdges();
-    const auto& Q2_lines = fXbins.GetQ2Bins();
-    const auto& t_lines = fXbins.GetTBins();
+    const auto Q2_lines = GetAllConfiguredQ2Edges();
+    const auto t_lines = GetAllConfiguredTEdges();
     double xBmin = 0.05, xBmax = 0.7;
     double Q2min = 0.5, Q2max = 7.0;
     double tmin = 0.0, tmax = 2.0;
@@ -3092,6 +3205,137 @@ class DISANAcomparer {
       std::cerr << "No histograms to compare.\n";
       return;
     }
+    if (fXbins.HasCustomBins()) {
+      const auto& customBins = fXbins.GetCustomBins();
+      const std::string customOutputDir = outputDir + "/" + observableName;
+      fs::create_directories(customOutputDir);
+
+      for (size_t binIndex = 0; binIndex < customBins.size(); ++binIndex) {
+        const auto& bin = customBins[binIndex];
+        TCanvas* canvas = new TCanvas(
+            Form("%s_bin%zu", observableName.c_str(), binIndex),
+            Form("%s bin %zu", observableName.c_str(), binIndex),
+            1200, 900);
+        styleBSA_.StylePad((TPad*)canvas);
+        if (setLogY) canvas->SetLogy();
+
+        TLegend* legend = new TLegend(0.56, 0.72, 0.88, 0.88);
+        legend->SetBorderSize(0);
+        legend->SetFillStyle(0);
+        legend->SetTextSize(0.035);
+
+        bool first = true;
+        std::vector<std::unique_ptr<TGraphErrors>> finiteGraphs;
+        std::vector<std::unique_ptr<TF1>> fits;
+        for (size_t model = 0; model < histograms.size(); ++model) {
+          if (histograms[model].empty() ||
+              binIndex >= histograms[model][0].size() ||
+              histograms[model][0][binIndex].empty()) {
+            continue;
+          }
+          TH1D* h = histograms[model][0][binIndex][0];
+          if (!h) continue;
+
+          styleBSA_.StyleTH1(h);
+          auto [r, g, b] = modelShades[model % modelShades.size()];
+          const int colorIndex = 3000 + model * 20;
+          if (!gROOT->GetColor(colorIndex)) new TColor(colorIndex, r, g, b);
+          h->SetLineColor(colorIndex);
+          h->SetMarkerColor(colorIndex);
+          h->SetLineWidth(1);
+          h->SetMarkerStyle(20);
+          h->SetMarkerSize(1.0);
+          h->SetStats(0);
+          h->GetXaxis()->SetTitle("#phi [deg]");
+          h->GetYaxis()->SetTitle(yAxisTitle.c_str());
+          h->GetXaxis()->SetRangeUser(0.0, 360.0);
+          if (setManualYrange) h->GetYaxis()->SetRangeUser(yMin, yMax);
+
+          auto graph = std::make_unique<TGraphErrors>();
+          for (int histBin = 1; histBin <= h->GetNbinsX(); ++histBin) {
+            const double x = h->GetBinCenter(histBin);
+            const double y = h->GetBinContent(histBin);
+            const double ey = h->GetBinError(histBin);
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(ey)) continue;
+            const int point = graph->GetN();
+            graph->SetPoint(point, x, y);
+            graph->SetPointError(point, 0.0, ey);
+          }
+          if (graph->GetN() == 0) {
+            std::cout << "No finite points for " << observableName
+                      << " custom bin " << binIndex
+                      << ", model " << labels[model] << "; skipping draw.\n";
+            continue;
+          }
+
+          graph->SetName(Form("graph_%s_bin%zu_model%zu", observableName.c_str(), binIndex, model));
+          graph->SetTitle("");
+          graph->SetLineColor(colorIndex);
+          graph->SetMarkerColor(colorIndex);
+          graph->SetLineWidth(1);
+          graph->SetMarkerStyle(20);
+          graph->SetMarkerSize(1.0);
+          graph->Draw(first ? "AP" : "P SAME");
+          if (first) {
+            graph->GetXaxis()->SetTitle("#phi [deg]");
+            graph->GetYaxis()->SetTitle(yAxisTitle.c_str());
+            graph->GetXaxis()->SetLimits(0.0, 360.0);
+            if (setManualYrange) {
+              graph->SetMinimum(yMin);
+              graph->SetMaximum(yMax);
+            }
+          }
+          first = false;
+          legend->AddEntry(graph.get(), labels[model].c_str(), "p");
+
+          if (fitSinusoid && graph->GetN() >= 4) {
+            auto fit = std::make_unique<TF1>(
+                Form("fit_%s_bin%zu_model%zu", observableName.c_str(), binIndex, model),
+                "[0] + ([1]*sin(x*TMath::DegToRad())) / (1 + [2]*cos(x*TMath::DegToRad()))",
+                0.0, 360.0);
+            fit->SetParameters(0.0, 0.2, 0.1);
+            fit->SetLineColor(colorIndex);
+            fit->SetLineStyle(2);
+            fit->SetLineWidth(1);
+            graph->Fit(fit.get(), "Q0");
+            fit->Draw("SAME");
+            fits.push_back(std::move(fit));
+          }
+          finiteGraphs.push_back(std::move(graph));
+
+          if (showMeanKin && meanValues &&
+              model < meanValues->size() &&
+              !(*meanValues)[model].empty() &&
+              binIndex < (*meanValues)[model][0].size() &&
+              !(*meanValues)[model][0][binIndex].empty()) {
+            auto [mean_xB, mean_Q2, mean_t] = (*meanValues)[model][0][binIndex][0];
+            dumpHistogram(
+                h, mean_xB, mean_Q2, mean_t,
+                bin.xBMin, bin.xBMax,
+                bin.Q2Min, bin.Q2Max,
+                bin.tMin, bin.tMax,
+                labels[model],
+                Form("datapoint_%s.txt", observableName.c_str()));
+          }
+        }
+
+        TLatex binLabel;
+        binLabel.SetNDC();
+        binLabel.SetTextFont(42);
+        binLabel.SetTextSize(0.032);
+        binLabel.DrawLatex(
+            0.14, 0.92,
+            Form("x_{B}:[%.3f,%.3f), Q^{2}:[%.3f,%.3f), t:[%.3f,%.3f)",
+                 bin.xBMin, bin.xBMax, bin.Q2Min, bin.Q2Max, bin.tMin, bin.tMax));
+        legend->Draw();
+        canvas->SaveAs(
+            Form("%s/%s_bin%03zu.%s",
+                 customOutputDir.c_str(), observableName.c_str(), binIndex, suffix.c_str()));
+        delete canvas;
+      }
+      return;
+    }
+
     const auto& q2_edges = fXbins.GetQ2Bins();
     const auto& t_edges = fXbins.GetTBins();
 

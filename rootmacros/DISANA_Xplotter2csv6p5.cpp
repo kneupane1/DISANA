@@ -350,7 +350,7 @@ void DISANA_Xplotter2csv6p5() {
 
   ROOT::EnableImplicitMT(40);
  
-  std::string input_path_from_analysisRun_6535_data = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File6535BSA/";
+  std::string input_path_from_analysisRun_6535_data = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File6535BSA";
   std::string input_path_from_analysisRun_6535_pi0MC = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File6535BSA/Pi0MC/";
   std::string input_path_from_analysisRun_6535_dvcsmc_rec = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File6535/nobkg/";
   std::string input_path_from_analysisRun_6535_dvcsmc_gen = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File6535/nobkgall/";
@@ -372,9 +372,9 @@ void DISANA_Xplotter2csv6p5() {
   bool momentumcorr_sys = false;  // Set to true to apply momentum correction systematic variation
   float momentumcorr_scale_factor = 0.9;  // Set to 1.0 for nominal, >1.0 for up variation, <1.0 for down variation
   bool dvcs_selection_sys = false;  // Vary DVCS CSV exclusivity windows
-  float dvcs_selection_scale_factor = 0.9;
+  float dvcs_selection_scale_factor = 1.25;
   bool dvpi0_selection_sys = false;  // Vary only DVpi0 InrangeVaried windows
-  float dvpi0_selection_scale_factor = 0.9;
+  float dvpi0_selection_scale_factor = 1.25;
 
   const double momentumcorr_factor =
       momentumcorr_sys ? momentumcorr_scale_factor : 1.0;
@@ -453,16 +453,58 @@ void DISANA_Xplotter2csv6p5() {
   //xBins.SetTBins({0.13, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0});
   //xBins.SetXBBins({0.150, 0.180, 0.210, 0.240, 0.285, 0.350, 0.430});
 
-  xBins.SetQ2Bins({1.00, 1.20, 1.50, 2.00, 2.80, 4.50});
-  xBins.SetTBins({0.13, 0.23, 0.43, 1.0, 2.0});
+  //xBins.SetQ2Bins({1.00, 1.20, 1.50, 2.00, 2.80, 4.50});
+  //xBins.SetTBins({0.13, 0.23, 0.43, 1.0, 2.0});
   // One xB edge vector for each Q2 interval above. For example, with
   // Q2 edges {1.0, 1.5, 2.0}, pass {{...for 1.0-1.5...}, {...for 1.5-2.0...}}.
-  xBins.SetXBBinsByQ2({
-      {0.110, 0.170, 0.285}, // for 1.00-1.25
-      {0.140, 0.210, 0.330}, // for 1.25-1.50
-      {0.175, 0.250, 0.390}, // for 1.50-1.80
-      {0.210, 0.460}, // for 1.80-2.60
-      {0.300, 0.590}, // for 2.60-4.50
+  //xBins.SetXBBinsByQ2({
+  //    {0.110, 0.170, 0.285}, // for 1.00-1.25
+  //    {0.140, 0.210, 0.330}, // for 1.25-1.50
+  //    {0.175, 0.250, 0.390}, // for 1.50-1.80
+  //    {0.210, 0.460}, // for 1.80-2.60
+  //    {0.300, 0.590}, // for 2.60-4.50
+  //});
+
+  // Alternative: configure independent (xB, Q2, t) bins one by one.
+  // Calling AddCustomBin or SetCustomBins switches BinManager to custom-bin mode.
+  // Calling the traditional SetQ2Bins/SetTBins/SetXBBins methods switches back.
+  //
+  // xBins.ClearCustomBins();
+  // xBins.AddCustomBin(0.090, 0.160, 1.00, 1.20, 0.13, 0.23);
+  // xBins.AddCustomBin(0.160, 0.285, 1.00, 1.20, 0.23, 0.43);
+  //
+  // Equivalent batch configuration:
+  xBins.SetCustomBins({
+       {0.000, 0.170, 1.00, 7.00, 0.00, 0.25},
+       {0.000, 0.170, 1.00, 7.00, 0.25, 0.38},
+       {0.000, 0.170, 1.00, 7.00, 0.38, 0.56},
+       {0.000, 0.170, 1.00, 7.00, 0.56, 0.91},
+       {0.000, 0.170, 1.00, 7.00, 0.91, 2.00},
+       {0.170, 0.270, 1.00, 1.20, 0.00, 0.32},
+       {0.170, 0.270, 1.00, 1.20, 0.32, 0.47},
+       {0.170, 0.270, 1.00, 1.20, 0.47, 0.62},
+       {0.170, 0.270, 1.00, 1.20, 0.62, 0.83},
+       {0.170, 0.270, 1.00, 1.20, 0.83, 2.00},
+       {0.170, 0.270, 1.20, 1.40, 0.00, 0.33},
+       {0.170, 0.270, 1.20, 1.40, 0.33, 0.49},
+       {0.170, 0.270, 1.20, 1.40, 0.49, 0.67},
+       {0.170, 0.270, 1.20, 1.40, 0.67, 0.94},
+       {0.170, 0.270, 1.20, 1.40, 0.94, 2.00},
+       {0.170, 0.270, 1.40, 7.00, 0.00, 0.32},
+       {0.170, 0.270, 1.40, 7.00, 0.32, 0.50},
+       {0.170, 0.270, 1.40, 7.00, 0.50, 0.71},
+       {0.170, 0.270, 1.40, 7.00, 0.71, 1.07},
+       {0.170, 0.270, 1.40, 7.00, 1.07, 2.00},
+       {0.270, 0.500, 1.00, 2.00, 0.00, 0.44},
+       {0.270, 0.500, 1.00, 2.00, 0.44, 0.62},
+       {0.270, 0.500, 1.00, 2.00, 0.62, 0.80},
+       {0.270, 0.500, 1.00, 2.00, 0.80, 1.06},
+       {0.270, 0.500, 1.00, 2.00, 1.06, 2.00},
+       {0.270, 0.500, 2.00, 7.00, 0.00, 0.58},
+       {0.270, 0.500, 2.00, 7.00, 0.58, 0.84},
+       {0.270, 0.500, 2.00, 7.00, 0.84, 1.18},
+       {0.270, 0.500, 2.00, 7.00, 1.18, 1.58},
+       {0.270, 0.500, 2.00, 7.00, 1.58, 2.00}
   });
 
   comparer.SetXBinsRanges(xBins);
@@ -513,7 +555,7 @@ void DISANA_Xplotter2csv6p5() {
                               df_afterFid_6535_dvcsmc_rad,
                               df_afterFid_6535_dvcsmc_norad,
                               df_afterFid_6535_dvcsmc_p1cut,
-                              "RGK 6.5GeV", beam_energy, true, true, true, true, true, luminosity, 55.09, 60, 0.8335/*0.8280/0.9495*/);
+                              "RGK 6.5GeV", beam_energy, true, false, false, false, false, luminosity, 55.09, 60, 0.8335/*0.8280/0.9495*/);
 
 
   //comparer.PlotKinematicComparison();
@@ -524,7 +566,16 @@ void DISANA_Xplotter2csv6p5() {
   //comparer.PlotxBQ2tBinPi0MC();
   //comparer.PlotDVCSKinematicsComparison();
   //comparer.PlotDVPi0KinematicsComparison();
-  comparer.PlotDIS_BSA_Cross_Section_AndCorr_Comparison(polarisation, true, true, true, true, true, true, true, true);
+  comparer.PlotDIS_BSA_Cross_Section_AndCorr_Comparison(
+      polarisation,
+      true,   // BSA
+      false,  // DVCS cross section
+      true,   // Pi0 correction
+      false,  // acceptance correction
+      false,  // efficiency correction
+      false,  // radiative correction
+      false,  // P1 cut
+      true); // mean kinematics
   //comparer.PlotDISCrossSectionComparison(luminosity);  // argument is Luminosity, polarisation
   //comparer.PlotDIS_BSA_Comparison(luminosity, polarisation);         // argument is Luminosity
   //comparer.PlotDIS_Pi0CorrComparison();

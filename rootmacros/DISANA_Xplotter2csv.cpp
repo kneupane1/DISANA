@@ -361,7 +361,7 @@ void DISANA_Xplotter2csv() {
 
   ROOT::EnableImplicitMT(40);
 
-  std::string input_path_from_analysisRun_7546_data = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546BSA/";
+  std::string input_path_from_analysisRun_7546_data = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546BSA";
 
   std::string input_path_from_analysisRun_7546_pi0MC = "/work/clas12/yijie/clas12ana/analysis1301/DISANA/build/File7546BSA/Pi0MC/";
 
@@ -393,9 +393,9 @@ void DISANA_Xplotter2csv() {
   bool momentumcorr_sys = false;  // Set to true to apply momentum correction systematic variation
   float momentumcorr_scale_factor = 0.9;  // Set to 1.0 for nominal, >1.0 for up variation, <1.0 for down variation
   bool dvcs_selection_sys = false;  // Vary DVCS CSV exclusivity windows
-  float dvcs_selection_scale_factor = 0.9;
+  float dvcs_selection_scale_factor = 1.25;
   bool dvpi0_selection_sys = false;  // Vary only DVpi0 InrangeVaried windows
-  float dvpi0_selection_scale_factor = 0.9;
+  float dvpi0_selection_scale_factor = 1.25;
 
   const double momentumcorr_factor =
       momentumcorr_sys ? momentumcorr_scale_factor : 1.0;
@@ -531,16 +531,58 @@ void DISANA_Xplotter2csv() {
   //xBins.SetTBins({0.2, 0.4, 0.6, 1.0});
   //xBins.SetXBBins({0.125, 0.15, 0.175, 0.2, 0.25, 0.3});
 
-  xBins.SetQ2Bins({1.00, 1.20, 1.50, 2.00, 2.80, 6.00});
-  xBins.SetTBins({0.13, 0.23, 0.43, 1.0, 2.0});
+  //xBins.SetQ2Bins({1.00, 1.20, 1.50, 2.00, 2.80, 6.00});
+  //xBins.SetTBins({0.13, 0.23, 0.43, 1.0, 2.0});
   // One xB edge vector for each Q2 interval above. For example, with
   // Q2 edges {1.0, 1.5, 2.0}, pass {{...for 1.0-1.5...}, {...for 1.5-2.0...}}.
-  xBins.SetXBBinsByQ2({
-      {0.090, 0.160, 0.285}, // for 1.00-1.25
-      {0.120, 0.200, 0.330}, // for 1.25-1.50
-      {0.140, 0.250, 0.400}, // for 1.50-2.00
-      {0.190, 0.480}, // for 2.00-2.80
-      {0.270, 0.630} // for 2.80-6.00
+  //xBins.SetXBBinsByQ2({
+  //    {0.090, 0.160, 0.285}, // for 1.00-1.25
+  //    {0.120, 0.200, 0.330}, // for 1.25-1.50
+  //    {0.140, 0.250, 0.400}, // for 1.50-2.00
+  //    {0.190, 0.480}, // for 2.00-2.80
+  //    {0.270, 0.630} // for 2.80-6.00
+  //});
+
+  // Alternative: configure independent (xB, Q2, t) bins one by one.
+  // Calling AddCustomBin or SetCustomBins switches BinManager to custom-bin mode.
+  // Calling the traditional SetQ2Bins/SetTBins/SetXBBins methods switches back.
+  //
+  // xBins.ClearCustomBins();
+  // xBins.AddCustomBin(0.090, 0.160, 1.00, 1.20, 0.13, 0.23);
+  // xBins.AddCustomBin(0.160, 0.285, 1.00, 1.20, 0.23, 0.43);
+  //
+  // Equivalent batch configuration:
+  xBins.SetCustomBins({
+       {0.000, 0.130, 1.00, 7.00, 0.00, 0.19},
+       {0.000, 0.130, 1.00, 7.00, 0.19, 0.25},
+       {0.000, 0.130, 1.00, 7.00, 0.25, 0.35},
+       {0.000, 0.130, 1.00, 7.00, 0.35, 0.56},
+       {0.000, 0.130, 1.00, 7.00, 0.56, 2.00},
+       {0.130, 0.220, 1.00, 1.20, 0.00, 0.31},
+       {0.130, 0.220, 1.00, 1.20, 0.31, 0.44},
+       {0.130, 0.220, 1.00, 1.20, 0.44, 0.59},
+       {0.130, 0.220, 1.00, 1.20, 0.59, 0.81},
+       {0.130, 0.220, 1.00, 1.20, 0.81, 2.00},
+       {0.130, 0.220, 1.20, 1.50, 0.00, 0.27},
+       {0.130, 0.220, 1.20, 1.50, 0.27, 0.39},
+       {0.130, 0.220, 1.20, 1.50, 0.39, 0.55},
+       {0.130, 0.220, 1.20, 1.50, 0.55, 0.80},
+       {0.130, 0.220, 1.20, 1.50, 0.80, 2.00},
+       {0.130, 0.220, 1.50, 7.00, 0.00, 0.25},
+       {0.130, 0.220, 1.50, 7.00, 0.25, 0.35},
+       {0.130, 0.220, 1.50, 7.00, 0.35, 0.48},
+       {0.130, 0.220, 1.50, 7.00, 0.48, 0.73},
+       {0.130, 0.220, 1.50, 7.00, 0.73, 2.00},
+       {0.220, 0.500, 1.00, 1.80, 0.00, 0.44},
+       {0.220, 0.500, 1.00, 1.80, 0.44, 0.64},
+       {0.220, 0.500, 1.00, 1.80, 0.64, 0.80},
+       {0.220, 0.500, 1.00, 1.80, 0.80, 1.04},
+       {0.220, 0.500, 1.00, 1.80, 1.04, 2.00},
+       {0.220, 0.500, 1.80, 7.00, 0.00, 0.52},
+       {0.220, 0.500, 1.80, 7.00, 0.52, 0.77},
+       {0.220, 0.500, 1.80, 7.00, 0.77, 1.07},
+       {0.220, 0.500, 1.80, 7.00, 1.07, 1.50},
+       {0.220, 0.500, 1.80, 7.00, 1.50, 2.00}
   });
 
   comparer.SetXBinsRanges(xBins);
@@ -644,24 +686,33 @@ void DISANA_Xplotter2csv() {
                               df_afterFid_7546_dvcsmc_rad,
                               df_afterFid_7546_dvcsmc_norad,
                               df_afterFid_7546_dvcsmc_p1cut,
-                              "RGK 7.5GeV", beam_energy, true, true, true, true, true, luminosity, 39.32, 45, 0.9837/*0.9069/0.9647*/);
+                              "RGK 7.5GeV", beam_energy, true, false, false, false, false, luminosity, 39.32, 45, 0.9837/*0.9069/0.9647*/);
 
   //comparer.PlotKinematicComparison();
   //comparer.PlotPi0KinematicComparison();
-  //comparer.PlotxBQ2tBin();
+  comparer.PlotxBQ2tBin();
   //comparer.PlotxBQ2tBinPi0();
   //comparer.PlotxBQ2tBinMC();
   //comparer.PlotxBQ2tBinPi0MC();
   //comparer.PlotDVCSKinematicsComparison();
   //comparer.PlotDVPi0KinematicsComparison();
-  //comparer.PlotDIS_BSA_Cross_Section_AndCorr_Comparison(polarisation, true, true, true, true, true, true, true, true);   
+  comparer.PlotDIS_BSA_Cross_Section_AndCorr_Comparison(
+      polarisation,
+      true,   // BSA
+      false,  // DVCS cross section
+      true,   // Pi0 correction
+      false,  // acceptance correction
+      false,  // efficiency correction
+      false,  // radiative correction
+      false,  // P1 cut
+      true); // mean kinematics
   //comparer.PlotDISCrossSectionComparison(luminosity);  // argument is Luminosity, polarisation
   //comparer.PlotDIS_BSA_Comparison(luminosity, polarisation);         // argument is Luminosity
   //comparer.PlotDIS_Pi0CorrComparison();
   //comparer.PlotMomentumCorrection();
   //comparer.PlotExclusivityComparisonByDetectorCases(detCuts);
-  std::vector<double> tbin = {0.13, 0.23, 0.43, 1.0, 2.0};
-  comparer.PlotExclusivityComparisonByDetectorCaseswithPi0(detCuts, tbin);
+  //std::vector<double> tbin = {0.13, 0.23, 0.43, 1.0, 2.0};
+  //comparer.PlotExclusivityComparisonByDetectorCaseswithPi0(detCuts, tbin);
   bool draw_dvpi0_mc = true;
   bool output_wide_mpi0 = false;
   //comparer.PlotPi0ExclusivityComparisonByDetectorCases(detCutsPi0, draw_dvpi0_mc, output_wide_mpi0);

@@ -806,6 +806,8 @@ class DISANAplotter {
 
             const bool has_pi0_correction =
                 std::isfinite(c_val) && std::isfinite(c_err)
+                && std::isfinite(xs_val) && std::isfinite(xs_err)
+                && std::isfinite(pi0_val) && std::isfinite(pi0_err)
                 && c_val > 0.0 && std::abs(1.0 - c_val) > 1e-12;
             if (!has_pi0_correction) {
               const double invalid =
@@ -815,8 +817,20 @@ class DISANAplotter {
               continue;
             }
 
-            const double val_corr = xs_val / (1.0 - c_val) - (pi0_val * c_val / (1.0 - c_val));
-            const double err_corr = std::sqrt(std::pow(xs_err * (1.0 - c_val), 2) + std::pow(xs_val * c_err, 2));
+            const double one_minus_c = 1.0 - c_val;
+            const double val_corr =
+                (xs_val - c_val * pi0_val) / one_minus_c;
+
+            // Independent first-order propagation for
+            // A_corr = (A_raw - c * A_pi0) / (1 - c).
+            const double d_raw = 1.0 / one_minus_c;
+            const double d_pi0 = -c_val / one_minus_c;
+            const double d_corr = (xs_val - pi0_val) /
+                                  (one_minus_c * one_minus_c);
+            const double err_corr = std::sqrt(
+                std::pow(d_raw * xs_err, 2) +
+                std::pow(d_pi0 * pi0_err, 2) +
+                std::pow(d_corr * c_err, 2));
 
             hNew->SetBinContent(b, val_corr);
             hNew->SetBinError(b, err_corr);

@@ -24,6 +24,7 @@
 
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 
 double NormalizeHCorrByMiddle(TH1* hCorr)
@@ -111,6 +112,15 @@ TLorentzVector Build4Vector(double p, double theta, double phi, double mass) {
 // -----------------------------------------------------------------------------
 class BinManager {
  public:
+  struct KinematicBin {
+    double xBMin;
+    double xBMax;
+    double Q2Min;
+    double Q2Max;
+    double tMin;
+    double tMax;
+  };
+
   BinManager() {
     q2_bins_ = {1.0, 2.0, 4.0, 6.0};
     t_bins_ = {0.1, 0.3, 0.6, 1.0};
@@ -134,6 +144,9 @@ class BinManager {
   }
   const std::vector<std::vector<double>> &GetXBBinsByQ2() const { return xb_bins_by_q2_; }
   bool HasQ2DependentXBBins() const { return !xb_bins_by_q2_.empty(); }
+  bool HasCustomBins() const { return !custom_bins_.empty(); }
+  const std::vector<KinematicBin> &GetCustomBins() const { return custom_bins_; }
+  const KinematicBin &GetCustomBin(size_t index) const { return custom_bins_.at(index); }
   size_t GetMaxXBBinCount() const {
     if (xb_bins_by_q2_.empty()) return xb_bins_.size() > 1 ? xb_bins_.size() - 1 : 0;
     size_t max_bins = 0;
@@ -149,21 +162,27 @@ class BinManager {
   const std::vector<double>& GetZPhiBins() const { return z_phi_bins_; }
   void SetQ2Bins(const std::vector<double> &v) {
     ValidateEdges(v, "Q2");
+    const bool wasCustom = HasCustomBins();
+    ClearCustomBins();
+    if (wasCustom) xb_bins_by_q2_.clear();
     if (!xb_bins_by_q2_.empty() && xb_bins_by_q2_.size() != v.size() - 1) {
       throw std::invalid_argument("New Q2 bins do not match the existing SetXBBinsByQ2 configuration");
     }
     q2_bins_ = v;
   }
   void SetTBins(const std::vector<double> &v) {
+    ClearCustomBins();
     ValidateEdges(v, "t");
     t_bins_ = v;
   }
   void SetXBBins(const std::vector<double> &v) {
+    ClearCustomBins();
     ValidateEdges(v, "xB");
     xb_bins_ = v;
     xb_bins_by_q2_.clear();
   }
   void SetXBBinsByQ2(const std::vector<std::vector<double>> &v) {
+    ClearCustomBins();
     const size_t n_q2 = q2_bins_.size() > 1 ? q2_bins_.size() - 1 : 0;
     if (v.size() != n_q2) {
       throw std::invalid_argument("SetXBBinsByQ2 requires exactly one xB edge vector per Q2 bin");
@@ -176,6 +195,32 @@ class BinManager {
     }
     std::sort(xb_bins_.begin(), xb_bins_.end());
     xb_bins_.erase(std::unique(xb_bins_.begin(), xb_bins_.end()), xb_bins_.end());
+  }
+  void ClearCustomBins() {
+    if (custom_bins_.empty()) return;
+    custom_bins_.clear();
+    if (has_custom_backup_) {
+      q2_bins_ = custom_backup_q2_bins_;
+      t_bins_ = custom_backup_t_bins_;
+      xb_bins_ = custom_backup_xb_bins_;
+      xb_bins_by_q2_ = custom_backup_xb_bins_by_q2_;
+      has_custom_backup_ = false;
+    }
+  }
+  void AddCustomBin(double xBMin, double xBMax,
+                    double Q2Min, double Q2Max,
+                    double tMin, double tMax) {
+    ValidateCustomBin({xBMin, xBMax, Q2Min, Q2Max, tMin, tMax});
+    SaveTraditionalConfiguration();
+    custom_bins_.push_back({xBMin, xBMax, Q2Min, Q2Max, tMin, tMax});
+    ConfigureCustomStorage();
+  }
+  void SetCustomBins(const std::vector<KinematicBin> &bins) {
+    if (bins.empty()) throw std::invalid_argument("SetCustomBins requires at least one bin");
+    for (const auto &bin : bins) ValidateCustomBin(bin);
+    SaveTraditionalConfiguration();
+    custom_bins_ = bins;
+    ConfigureCustomStorage();
   }
   void SetWBins(const std::vector<double> &v) { W_bins_ = v; }
   void SetTprimeBins(const std::vector<double> &v) { tprime_bins_ = v; }
@@ -335,6 +380,29 @@ class BinManager {
   };
 
  private:
+  static void ValidateCustomBin(const KinematicBin &bin) {
+    if (!(bin.xBMin < bin.xBMax && bin.Q2Min < bin.Q2Max && bin.tMin < bin.tMax)) {
+      throw std::invalid_argument("Custom bin requires min < max for xB, Q2, and t");
+    }
+  }
+
+  void SaveTraditionalConfiguration() {
+    if (has_custom_backup_) return;
+    custom_backup_q2_bins_ = q2_bins_;
+    custom_backup_t_bins_ = t_bins_;
+    custom_backup_xb_bins_ = xb_bins_;
+    custom_backup_xb_bins_by_q2_ = xb_bins_by_q2_;
+    has_custom_backup_ = true;
+  }
+
+  void ConfigureCustomStorage() {
+    q2_bins_.resize(custom_bins_.size() + 1);
+    std::iota(q2_bins_.begin(), q2_bins_.end(), 0.0);
+    t_bins_ = {0.0, 1.0};
+    xb_bins_ = {0.0, 1.0};
+    xb_bins_by_q2_.assign(custom_bins_.size(), {0.0, 1.0});
+  }
+
   static void ValidateEdges(const std::vector<double> &edges, const char *name) {
     if (edges.size() < 2 || !std::is_sorted(edges.begin(), edges.end()) ||
         std::adjacent_find(edges.begin(), edges.end()) != edges.end()) {
@@ -353,6 +421,10 @@ class BinManager {
 
   std::vector<double> q2_bins_, t_bins_, xb_bins_, W_bins_, tprime_bins_, cos_thetaKK_bins_,trento_phi_bins_,  z_phi_bins_;
   std::vector<std::vector<double>> xb_bins_by_q2_;
+  std::vector<KinematicBin> custom_bins_;
+  bool has_custom_backup_ = false;
+  std::vector<double> custom_backup_q2_bins_, custom_backup_t_bins_, custom_backup_xb_bins_;
+  std::vector<std::vector<double>> custom_backup_xb_bins_by_q2_;
 };
 
 // -----------------------------------------------------------------------------
@@ -868,6 +940,67 @@ class DISANAMath {
     constexpr double phi_min = 0.0, phi_max = 360.0;
     constexpr int n_phi_bins = 18;
 
+    if (bins.HasCustomBins()) {
+      const auto &customBins = bins.GetCustomBins();
+      const size_t nBins = customBins.size();
+      std::vector<std::vector<std::vector<TH1D *>>> hist(
+          1, std::vector<std::vector<TH1D *>>(nBins, std::vector<TH1D *>(1, nullptr)));
+
+      for (size_t ib = 0; ib < nBins; ++ib) {
+        const auto &bin = customBins[ib];
+        hist[0][ib][0] = new TH1D(
+            Form("hphi_custom_%zu", ib),
+            Form("d#sigma/d#phi (x_{B}=[%.3f,%.3f], Q^{2}=[%.3f,%.3f], t=[%.3f,%.3f])",
+                 bin.xBMin, bin.xBMax, bin.Q2Min, bin.Q2Max, bin.tMin, bin.tMax),
+            n_phi_bins, phi_min, phi_max);
+        hist[0][ib][0]->SetDirectory(nullptr);
+      }
+
+      const unsigned int nSlots = df.GetNSlots();
+      std::vector<std::vector<TH1D *>> slotHist(
+          nSlots, std::vector<TH1D *>(nBins, nullptr));
+      for (unsigned int slot = 0; slot < nSlots; ++slot) {
+        for (size_t ib = 0; ib < nBins; ++ib) {
+          slotHist[slot][ib] = static_cast<TH1D *>(
+              hist[0][ib][0]->Clone(Form("hphi_custom_%zu_slot%u", ib, slot)));
+          slotHist[slot][ib]->Reset();
+          slotHist[slot][ib]->SetDirectory(nullptr);
+        }
+      }
+
+      auto fill = [&](unsigned int slot, double Q2, double t, double xB, double phi) {
+        for (size_t ib = 0; ib < nBins; ++ib) {
+          const auto &bin = customBins[ib];
+          if (xB >= bin.xBMin && xB < bin.xBMax &&
+              Q2 >= bin.Q2Min && Q2 < bin.Q2Max &&
+              t >= bin.tMin && t < bin.tMax) {
+            slotHist[slot][ib]->Fill(phi);
+          }
+        }
+      };
+      df.ForeachSlot(fill, {"Q2", "t", "xB", "phi"});
+
+      const double phiWidth = (pi / 180.) * (phi_max - phi_min) / n_phi_bins;
+      for (size_t ib = 0; ib < nBins; ++ib) {
+        for (unsigned int slot = 0; slot < nSlots; ++slot) {
+          hist[0][ib][0]->Add(slotHist[slot][ib]);
+          delete slotHist[slot][ib];
+        }
+        const auto &bin = customBins[ib];
+        const double volume = (bin.xBMax - bin.xBMin) *
+                              (bin.Q2Max - bin.Q2Min) *
+                              (bin.tMax - bin.tMin);
+        TH1D *h = hist[0][ib][0];
+        for (int b = 1; b <= h->GetNbinsX(); ++b) {
+          const double n = h->GetBinContent(b);
+          const double scale = 1.0 / (luminosity * phiWidth * volume);
+          h->SetBinContent(b, n * scale);
+          h->SetBinError(b, std::sqrt(std::max(0.0, n)) * scale);
+        }
+      }
+      return hist;
+    }
+
     const auto &q2_bins = bins.GetQ2Bins();
     const auto &t_bins = bins.GetTBins();
     const size_t n_q2 = q2_bins.size() - 1;
@@ -936,6 +1069,73 @@ class DISANAMath {
     timer.Start();
     constexpr double phi_min = 0.0, phi_max = 360.0;
     constexpr int n_phi_bins = 18;
+
+    if (bins.HasCustomBins()) {
+      const auto &customBins = bins.GetCustomBins();
+      const size_t nBins = customBins.size();
+      std::vector<std::vector<std::vector<TH1D *>>> hist(
+          1, std::vector<std::vector<TH1D *>>(nBins, std::vector<TH1D *>(1, nullptr)));
+
+      for (size_t ib = 0; ib < nBins; ++ib) {
+        const auto &bin = customBins[ib];
+        hist[0][ib][0] = new TH1D(
+            Form("hphi_custom_weighted_%zu", ib),
+            Form("d#sigma/d#phi (x_{B}=[%.3f,%.3f], Q^{2}=[%.3f,%.3f], t=[%.3f,%.3f])",
+                 bin.xBMin, bin.xBMax, bin.Q2Min, bin.Q2Max, bin.tMin, bin.tMax),
+            n_phi_bins, phi_min, phi_max);
+        hist[0][ib][0]->SetDirectory(nullptr);
+        hist[0][ib][0]->Sumw2();
+      }
+
+      const unsigned int nSlots = df.GetNSlots();
+      std::vector<std::vector<TH1D *>> slotHist(
+          nSlots, std::vector<TH1D *>(nBins, nullptr));
+      for (unsigned int slot = 0; slot < nSlots; ++slot) {
+        for (size_t ib = 0; ib < nBins; ++ib) {
+          slotHist[slot][ib] = static_cast<TH1D *>(
+              hist[0][ib][0]->Clone(Form("hphi_custom_weighted_%zu_slot%u", ib, slot)));
+          slotHist[slot][ib]->Reset();
+          slotHist[slot][ib]->SetDirectory(nullptr);
+        }
+      }
+
+      auto fillSlot = [&](unsigned int slot, double Q2, double t, double xB, double phi,
+                          int pho_det_region, int pro_det_region,
+                          double recel_p, double recel_theta, double recel_phi,
+                          double recpho_p, double recpho_theta, double recpho_phi,
+                          double recpro_p, double recpro_theta, double recpro_phi) {
+        const DVCSWeightInput input{pho_det_region, pro_det_region,
+                                    recel_p, recel_theta, recel_phi,
+                                    recpho_p, recpho_theta, recpho_phi,
+                                    recpro_p, recpro_theta, recpro_phi};
+        const double weight = weightFunc ? weightFunc(input) : 1.0;
+        for (size_t ib = 0; ib < nBins; ++ib) {
+          const auto &bin = customBins[ib];
+          if (xB >= bin.xBMin && xB < bin.xBMax &&
+              Q2 >= bin.Q2Min && Q2 < bin.Q2Max &&
+              t >= bin.tMin && t < bin.tMax) {
+            slotHist[slot][ib]->Fill(phi, weight);
+          }
+        }
+      };
+      df.ForeachSlot(fillSlot, {"Q2", "t", "xB", "phi", "pho_det_region", "pro_det_region",
+                                "recel_p", "recel_theta", "recel_phi", "recpho_p", "recpho_theta", "recpho_phi",
+                                "recpro_p", "recpro_theta", "recpro_phi"});
+
+      const double phiWidth = (pi / 180.) * (phi_max - phi_min) / n_phi_bins;
+      for (size_t ib = 0; ib < nBins; ++ib) {
+        for (unsigned int slot = 0; slot < nSlots; ++slot) {
+          hist[0][ib][0]->Add(slotHist[slot][ib]);
+          delete slotHist[slot][ib];
+        }
+        const auto &bin = customBins[ib];
+        const double volume = (bin.xBMax - bin.xBMin) *
+                              (bin.Q2Max - bin.Q2Min) *
+                              (bin.tMax - bin.tMin);
+        hist[0][ib][0]->Scale(1.0 / (luminosity * phiWidth * volume));
+      }
+      return hist;
+    }
 
     const auto &q2_bins = bins.GetQ2Bins();
     const auto &t_bins  = bins.GetTBins();
