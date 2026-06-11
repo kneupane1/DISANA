@@ -394,7 +394,7 @@ void DISANA_Xplotter2csv() {
   float momentumcorr_scale_factor = 0.9;  // Set to 1.0 for nominal, >1.0 for up variation, <1.0 for down variation
   bool dvcs_selection_sys = false;  // Vary DVCS CSV exclusivity windows
   float dvcs_selection_scale_factor = 0.9;
-  bool dvpi0_selection_sys = true;  // Vary only DVpi0 InrangeVaried windows
+  bool dvpi0_selection_sys = false;  // Vary only DVpi0 InrangeVaried windows
   float dvpi0_selection_scale_factor = 0.9;
 
   const double momentumcorr_factor =
@@ -648,19 +648,22 @@ void DISANA_Xplotter2csv() {
 
   //comparer.PlotKinematicComparison();
   //comparer.PlotPi0KinematicComparison();
-  comparer.PlotxBQ2tBin();
+  //comparer.PlotxBQ2tBin();
   //comparer.PlotxBQ2tBinPi0();
   //comparer.PlotxBQ2tBinMC();
   //comparer.PlotxBQ2tBinPi0MC();
   //comparer.PlotDVCSKinematicsComparison();
   //comparer.PlotDVPi0KinematicsComparison();
-  comparer.PlotDIS_BSA_Cross_Section_AndCorr_Comparison(polarisation, true, true, true, true, true, true, true, true);   
+  //comparer.PlotDIS_BSA_Cross_Section_AndCorr_Comparison(polarisation, true, true, true, true, true, true, true, true);   
   //comparer.PlotDISCrossSectionComparison(luminosity);  // argument is Luminosity, polarisation
   //comparer.PlotDIS_BSA_Comparison(luminosity, polarisation);         // argument is Luminosity
   //comparer.PlotDIS_Pi0CorrComparison();
   //comparer.PlotMomentumCorrection();
   //comparer.PlotExclusivityComparisonByDetectorCases(detCuts);
-  //comparer.PlotPi0ExclusivityComparisonByDetectorCases(detCutsPi0);
+  comparer.PlotExclusivityComparisonByDetectorCaseswithPi0(detCuts);
+  bool draw_dvpi0_mc = true;
+  bool output_wide_mpi0 = false;
+  //comparer.PlotPi0ExclusivityComparisonByDetectorCases(detCutsPi0, draw_dvpi0_mc, output_wide_mpi0);
   gApplication->Terminate(0);
 }
 

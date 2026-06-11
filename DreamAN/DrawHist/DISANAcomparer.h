@@ -2209,7 +2209,145 @@ class DISANAcomparer {
     }
   };
 
-  void PlotPi0ExclusivityComparisonByDetectorCases(const std::vector<std::pair<std::string, std::string>>& detectorCuts) {
+  void PlotExclusivityComparisonByDetectorCaseswithPi0(
+      const std::vector<std::pair<std::string, std::string>>& detectorCuts) {
+    std::vector<std::tuple<std::string, std::string, std::string, double, double>> vars = {
+        {"Mx2_ep", "Missing Mass Squared (ep)", "MM^{2}(ep) [GeV^{2}]", -0.6, 0.6},
+        {"Emiss", "Missing Energy", "E_{miss} [GeV]", -1.0, 2.0},
+        {"PTmiss", "Transverse Missing Momentum", "P_{T}^{miss} [GeV/c]", -0.1, 0.4},
+        {"Theta_gamma_gamma", "#theta(#gamma, #vec{q})", "#theta_{#gamma#gamma'} [deg]", -2.0, 4.0},
+        {"DeltaPhi", "Coplanarity Angle", "#Delta#phi [deg]", 0.0, 20.0},
+        {"Mx2_epg", "Missing Mass Squared (ep#gamma)", "MM^{2}(ep#gamma) [GeV^{2}]", -0.05, 0.05},
+        {"Mx2_eg", "Invariant Mass (e#gamma)", "M^{2}(e#gamma) [GeV^{2}]", -0.5, 3.0},
+        {"Theta_e_gamma", "Angle: e-#gamma", "#theta(e, #gamma) [deg]", 0.0, 60.0}};
+
+    for (const auto& [cutExpr, cutLabel] : detectorCuts) {
+      std::string cleanName = cutLabel;
+      std::replace(cleanName.begin(), cleanName.end(), ' ', '_');
+      std::replace(cleanName.begin(), cleanName.end(), ',', '_');
+
+      TCanvas* canvas = new TCanvas(("c_DVCS_vs_Pi0Data_" + cleanName).c_str(), cutLabel.c_str(), 1800, 1200);
+      const int cols = 3;
+      const int rows = (vars.size() + cols - 1) / cols;
+      canvas->Divide(cols, rows);
+
+      for (size_t i = 0; i < vars.size(); ++i) {
+        canvas->cd(i + 1);
+        const auto& [var, title, xlabel, xmin, xmax] = vars[i];
+        gPad->SetTicks();
+        styleKin_.StylePad((TPad*)gPad);
+
+        TLegend* legend = new TLegend(0.54, 0.68, 0.88, 0.88);
+        legend->SetBorderSize(0);
+        legend->SetFillStyle(0);
+        legend->SetTextSize(0.036);
+
+        TH1D* frameHistogram = nullptr;
+        double maxY = 0.0;
+        bool first = true;
+
+        for (size_t m = 0; m < plotters.size(); ++m) {
+          auto rdfDVCS = plotters[m]->GetRDF().Filter(cutExpr, cutLabel);
+          auto rdfPi0 = plotters[m]->GetRDF_Pi0Data().Filter(cutExpr, cutLabel);
+          auto rdfDVCSPi0MC = plotters[m]->GetRDF_DVCSSelectedPi0MC().Filter(cutExpr, cutLabel);
+          auto rdfPi0Pi0MC = plotters[m]->GetRDF_Pi0SelectedPi0MC().Filter(cutExpr, cutLabel);
+          if (!rdfDVCS.HasColumn(var)) continue;
+
+          auto hDVCSResult = rdfDVCS.Histo1D(
+              {Form("h_dvcs_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
+               (title + ";" + xlabel + ";Counts / N_{DVCS}").c_str(), 100, xmin, xmax},
+              var);
+          hDVCSResult.GetValue();
+          TH1D* hDVCS = (TH1D*)hDVCSResult.GetPtr()->Clone();
+          hDVCS->SetDirectory(0);
+
+          const double dvcsIntegral = hDVCS->Integral();
+          if (dvcsIntegral <= 0.0) {
+            delete hDVCS;
+            continue;
+          }
+
+          TH1D* hSubtracted = nullptr;
+          double pi0TransferFactor = 0.0;
+          if (rdfPi0.HasColumn(var) && rdfDVCSPi0MC.HasColumn(var) && rdfPi0Pi0MC.HasColumn(var)) {
+            auto hDVCSPi0MCResult = rdfDVCSPi0MC.Histo1D(
+                {Form("h_dvcs_pi0mc_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
+                 "", 100, xmin, xmax},
+                var);
+            auto hPi0Pi0MCResult = rdfPi0Pi0MC.Histo1D(
+                {Form("h_pi0_pi0mc_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
+                 "", 100, xmin, xmax},
+                var);
+            hDVCSPi0MCResult.GetValue();
+            hPi0Pi0MCResult.GetValue();
+            const double nDVCSPi0MC = hDVCSPi0MCResult.GetPtr()->Integral();
+            const double nPi0Pi0MC = hPi0Pi0MCResult.GetPtr()->Integral();
+            if (nPi0Pi0MC > 0.0) pi0TransferFactor = nDVCSPi0MC / nPi0Pi0MC;
+
+            auto hPi0Result = rdfPi0.Histo1D(
+                {Form("h_pi0data_%s_%s_%zu", var.c_str(), cleanName.c_str(), m),
+                 (title + ";" + xlabel + ";Counts / N_{DVCS}").c_str(), 100, xmin, xmax},
+                var);
+            hPi0Result.GetValue();
+            TH1D* hPi0Contamination = (TH1D*)hPi0Result.GetPtr()->Clone();
+            hPi0Contamination->SetDirectory(0);
+            hPi0Contamination->Scale(pi0TransferFactor);
+
+            hSubtracted = (TH1D*)hDVCS->Clone(Form("h_pi0_subtracted_%s_%s_%zu", var.c_str(), cleanName.c_str(), m));
+            hSubtracted->SetDirectory(0);
+            hSubtracted->Add(hPi0Contamination, -1.0);
+            for (int bin = 0; bin <= hSubtracted->GetNbinsX() + 1; ++bin) {
+              if (hSubtracted->GetBinContent(bin) < 0.0) hSubtracted->SetBinContent(bin, 0.0);
+            }
+            delete hPi0Contamination;
+          }
+
+          hDVCS->Scale(1.0 / dvcsIntegral);
+          styleKin_.StyleTH1(hDVCS);
+          hDVCS->SetLineColor(m + 2);
+          hDVCS->SetLineWidth(1);
+          hDVCS->SetLineStyle(2);
+
+          if (hSubtracted) {
+            hSubtracted->Scale(1.0 / dvcsIntegral);
+            styleKin_.StyleTH1(hSubtracted);
+            hSubtracted->SetLineColor(m + 2);
+            hSubtracted->SetLineWidth(1);
+            hSubtracted->SetLineStyle(1);
+          }
+
+          if (first) {
+            hDVCS->Draw("HIST");
+            frameHistogram = hDVCS;
+            first = false;
+          } else {
+            hDVCS->Draw("HIST SAME");
+          }
+          if (hSubtracted) hSubtracted->Draw("HIST SAME");
+
+          maxY = std::max(maxY, hDVCS->GetMaximum());
+          if (hSubtracted) maxY = std::max(maxY, hSubtracted->GetMaximum());
+          legend->AddEntry(hDVCS, (labels[m] + " DVCS Data").c_str(), "l");
+          if (hSubtracted) legend->AddEntry(hSubtracted, (labels[m] + " Pi0 Subtracted").c_str(), "l");
+        }
+
+        if (frameHistogram) frameHistogram->SetMaximum(maxY * 1.2);
+        legend->Draw();
+        gPad->Modified();
+        gPad->Update();
+      }
+
+      std::string outpath = outputDir + "/Exclusivity_DVCS_vs_Pi0Data_" + cleanName + ".pdf";
+      canvas->SaveAs(outpath.c_str());
+      std::cout << "Saved DVCS vs Pi0 data exclusivity comparison to: " << outpath << "\n";
+      delete canvas;
+    }
+  }
+
+  void PlotPi0ExclusivityComparisonByDetectorCases(
+      const std::vector<std::pair<std::string, std::string>>& detectorCuts,
+      bool drawDVPi0MC = true,
+      bool outputWideMpi0 = false) {
     std::vector<std::tuple<std::string, std::string, std::string, double, double>> vars = {
         {"Mass_pi0", "Pi0 Mass", "M_{#pi0} [GeV]", 0.07, 0.2},
         {"Emiss_pi0", "Missing Energy", "E_{miss} [GeV]", -1.0, 1.0},
@@ -2249,8 +2387,6 @@ class DISANAcomparer {
 
         for (size_t m = 0; m < plotters.size(); ++m) {
           auto rdf_data = plotters[m]->GetRDF_Pi0Data().Filter(cutExpr, cutLabel);
-          auto rdf_mc = plotters[m]->GetRDF_DVCSPi0MC().Filter(cutExpr, cutLabel);
-
           if (!rdf_data.HasColumn(var)) continue;
 
           double xlo = xmin, xhi = xmax;
@@ -2266,16 +2402,19 @@ class DISANAcomparer {
           hD->SetLineStyle(1);
 
           TH1D* hM = nullptr;
-          if (rdf_mc.HasColumn(var)) {
-            auto h_mc = rdf_mc.Histo1D({Form("h_mc_%s_%s_%zu", var.c_str(), cleanName.c_str(), m), (title + ";" + xlabel + ";Counts").c_str(), 100, xmin, xmax}, var);
-            h_mc.GetValue();
-            hM = (TH1D*)h_mc.GetPtr()->Clone();
-            hM->SetDirectory(0);
-            NormalizeHistogram(hM);
-            styleKin_.StyleTH1(hM);
-            hM->SetLineColor(m + 2);
-            hM->SetLineWidth(2);
-            hM->SetLineStyle(2);
+          if (drawDVPi0MC) {
+            auto rdf_mc = plotters[m]->GetRDF_DVCSPi0MC().Filter(cutExpr, cutLabel);
+            if (rdf_mc.HasColumn(var)) {
+              auto h_mc = rdf_mc.Histo1D({Form("h_mc_%s_%s_%zu", var.c_str(), cleanName.c_str(), m), (title + ";" + xlabel + ";Counts").c_str(), 100, xmin, xmax}, var);
+              h_mc.GetValue();
+              hM = (TH1D*)h_mc.GetPtr()->Clone();
+              hM->SetDirectory(0);
+              NormalizeHistogram(hM);
+              styleKin_.StyleTH1(hM);
+              hM->SetLineColor(m + 2);
+              hM->SetLineWidth(2);
+              hM->SetLineStyle(2);
+            }
           }
 
           if (first) {
@@ -2342,6 +2481,117 @@ class DISANAcomparer {
       canvas->SaveAs(outpath.c_str());
       std::cout << "Saved detector-specific comparison to: " << outpath << "\n";
       delete canvas;
+
+      if (outputWideMpi0) {
+        TCanvas* mpi0Canvas = new TCanvas(("c_Mass_pi0_wide_" + cleanName).c_str(), cutLabel.c_str(), 1600, 1200);
+        gPad->SetTicks();
+        styleKin_.StylePad((TPad*)gPad);
+
+        TLegend* mpi0Legend = new TLegend(0.50, 0.62, 0.88, 0.88);
+        mpi0Legend->SetBorderSize(0);
+        mpi0Legend->SetFillStyle(0);
+        mpi0Legend->SetTextSize(0.032);
+
+        TH1D* frameHistogram = nullptr;
+        double maxY = 0.0;
+        bool firstMpi0 = true;
+
+        for (size_t m = 0; m < plotters.size(); ++m) {
+          auto rdf_data = plotters[m]->GetRDF_Pi0Data().Filter(cutExpr, cutLabel);
+          if (!rdf_data.HasColumn("Mass_pi0")) continue;
+
+          auto h_data = rdf_data.Histo1D(
+              {Form("h_data_Mass_pi0_wide_%s_%zu", cleanName.c_str(), m),
+               "Wide Pi0 Mass;M_{#gamma#gamma} [GeV];Counts", 200, 0.0, 1.0},
+              "Mass_pi0");
+          h_data.GetValue();
+          TH1D* hD = (TH1D*)h_data.GetPtr()->Clone();
+          hD->SetDirectory(0);
+          auto countInRange = [](const TH1D* hist, double xmin, double xmax) {
+            const int firstBin = hist->GetXaxis()->FindFixBin(xmin + 1.0e-9);
+            const int lastBin = hist->GetXaxis()->FindFixBin(xmax - 1.0e-9);
+            return hist->Integral(firstBin, lastBin);
+          };
+          const double dataPi0Count = countInRange(hD, 0.05, 0.265);
+          const double dataEtaCount = countInRange(hD, 0.4, 0.7);
+          const double dataEtaPi0Ratio = dataPi0Count > 0.0 ? dataEtaCount / dataPi0Count : 0.0;
+          NormalizeHistogram(hD);
+          styleKin_.StyleTH1(hD);
+          hD->GetXaxis()->SetTitleSize(0.040);
+          hD->GetYaxis()->SetTitleSize(0.040);
+          hD->GetXaxis()->SetLabelSize(0.034);
+          hD->GetYaxis()->SetLabelSize(0.034);
+          hD->SetLineColor(m + 2);
+          hD->SetLineWidth(2);
+          hD->SetLineStyle(1);
+
+          TH1D* hM = nullptr;
+          double mcEtaPi0Ratio = 0.0;
+          if (drawDVPi0MC) {
+            auto rdf_mc = plotters[m]->GetRDF_DVCSPi0MC().Filter(cutExpr, cutLabel);
+            if (rdf_mc.HasColumn("Mass_pi0")) {
+              auto h_mc = rdf_mc.Histo1D(
+                  {Form("h_mc_Mass_pi0_wide_%s_%zu", cleanName.c_str(), m),
+                   "Wide Pi0 Mass;M_{#gamma#gamma} [GeV];Counts", 200, 0.0, 1.0},
+                  "Mass_pi0");
+              h_mc.GetValue();
+              hM = (TH1D*)h_mc.GetPtr()->Clone();
+              hM->SetDirectory(0);
+              const double mcPi0Count = countInRange(hM, 0.05, 0.265);
+              const double mcEtaCount = countInRange(hM, 0.4, 0.7);
+              mcEtaPi0Ratio = mcPi0Count > 0.0 ? mcEtaCount / mcPi0Count : 0.0;
+              NormalizeHistogram(hM);
+              styleKin_.StyleTH1(hM);
+              hM->SetLineColor(m + 2);
+              hM->SetLineWidth(2);
+              hM->SetLineStyle(2);
+            }
+          }
+
+          if (firstMpi0) {
+            hD->Draw("HIST");
+            frameHistogram = hD;
+            firstMpi0 = false;
+          } else {
+            hD->Draw("HIST SAME");
+          }
+          if (hM) hM->Draw("HIST SAME");
+
+          maxY = std::max(maxY, hD->GetMaximum());
+          if (hM) maxY = std::max(maxY, hM->GetMaximum());
+          mpi0Legend->AddEntry(hD, (labels[m] + " Data").c_str(), "l");
+          std::ostringstream dataRatioText;
+          dataRatioText << "N_{#eta}/N_{#pi^{0}} = " << std::fixed << std::setprecision(3) << dataEtaPi0Ratio;
+          mpi0Legend->AddEntry((TObject*)nullptr, dataRatioText.str().c_str(), "");
+          if (hM) mpi0Legend->AddEntry(hM, (labels[m] + " MC").c_str(), "l");
+          if (hM) {
+            std::ostringstream mcRatioText;
+            mcRatioText << "N_{#eta}/N_{#pi^{0}} = " << std::fixed << std::setprecision(3) << mcEtaPi0Ratio;
+            mpi0Legend->AddEntry((TObject*)nullptr, mcRatioText.str().c_str(), "");
+          }
+        }
+
+        if (frameHistogram) {
+          const double displayMax = maxY * 1.2;
+          frameHistogram->SetMaximum(displayMax);
+          const double lineHeight = displayMax / 3.0;
+          for (double boundary : {0.05, 0.265, 0.4, 0.7}) {
+            TLine* rangeLine = new TLine(boundary, 0.0, boundary, lineHeight);
+            rangeLine->SetLineColor(kGray + 2);
+            rangeLine->SetLineStyle(2);
+            rangeLine->SetLineWidth(2);
+            rangeLine->Draw("SAME");
+          }
+          mpi0Legend->Draw();
+          gPad->Modified();
+          gPad->Update();
+        }
+
+        std::string mpi0Outpath = outputDir + "/Pi0Exclusivity_Mass_pi0_wide_" + cleanName + ".pdf";
+        mpi0Canvas->SaveAs(mpi0Outpath.c_str());
+        std::cout << "Saved wide-range Mpi0 comparison to: " << mpi0Outpath << "\n";
+        delete mpi0Canvas;
+      }
     }
   }
 
